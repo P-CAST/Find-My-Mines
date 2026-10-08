@@ -16,7 +16,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "preview": "pnpm build && pnpm start",
-    "start": "node --env-file-if-exists=.env dist/standalone/start.js",
+    "start": "node --env-file-if-exists=.env dist/standalone/server.js",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
     "test:integration": "tsx scripts/verify-game.ts"
