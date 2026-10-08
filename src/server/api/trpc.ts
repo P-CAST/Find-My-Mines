@@ -13,6 +13,7 @@ import { ZodError } from "zod";
 
 import { auth } from "~/server/better-auth";
 import { db } from "~/server/db";
+import { gameSession } from "~/server/game/session";
 
 /**
  * 1. CONTEXT
@@ -26,11 +27,18 @@ import { db } from "~/server/db";
  *
  * @see https://trpc.io/docs/server/context
  */
-export const createTRPCContext = async (opts: { headers: Headers }) => {
+export const createTRPCContext = async (opts: {
+  headers: Headers;
+  responseHeaders?: Headers;
+  secure?: boolean;
+}) => {
   const session = await auth.api.getSession({
     headers: opts.headers,
   });
+  const responseHeaders = opts.responseHeaders ?? new Headers();
   return {
+    gameSession: gameSession(opts.headers, responseHeaders, opts.secure),
+    responseHeaders,
     db,
     session,
     ...opts,
@@ -46,6 +54,10 @@ export const createTRPCContext = async (opts: { headers: Headers }) => {
  */
 const t = initTRPC.context<typeof createTRPCContext>().create({
   transformer: superjson,
+  sse: {
+    ping: { enabled: true, intervalMs: 3000 },
+    client: { reconnectAfterInactivityMs: 7000 },
+  },
   errorFormatter({ shape, error }) {
     return {
       ...shape,
@@ -88,7 +100,7 @@ export const createTRPCRouter = t.router;
 const timingMiddleware = t.middleware(async ({ next, path }) => {
   const start = Date.now();
 
-  if (t._config.isDev) {
+  if (t._config.isDev && !path.startsWith("game.")) {
     // artificial delay in dev
     const waitMs = Math.floor(Math.random() * 400) + 100;
     await new Promise((resolve) => setTimeout(resolve, waitMs));

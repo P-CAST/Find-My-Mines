@@ -1,13 +1,20 @@
 "use client";
 
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
-import { httpBatchStreamLink, loggerLink } from "@trpc/client";
+import {
+  httpBatchStreamLink,
+  httpSubscriptionLink,
+  httpLink,
+  splitLink,
+  loggerLink,
+} from "@trpc/client";
 import { createTRPCReact } from "@trpc/react-query";
 import { type inferRouterInputs, type inferRouterOutputs } from "@trpc/server";
 import { useState } from "react";
 import SuperJSON from "superjson";
 
 import { type AppRouter } from "~/server/api/root";
+import { SERVER_ORIGIN } from "~/lib/game-config";
 import { createQueryClient } from "./query-client";
 
 let clientQueryClientSingleton: QueryClient | undefined = undefined;
@@ -45,18 +52,36 @@ export function TRPCReactProvider(props: { children: React.ReactNode }) {
     api.createClient({
       links: [
         loggerLink({
+          // Never log operator password inputs (including on failed responses).
           enabled: (op) =>
-            process.env.NODE_ENV === "development" ||
-            (op.direction === "down" && op.result instanceof Error),
+            op.direction === "up" &&
+            op.path !== "game.login" &&
+            process.env.NODE_ENV === "development",
         }),
-        httpBatchStreamLink({
-          transformer: SuperJSON,
-          url: getBaseUrl() + "/api/trpc",
-          headers: () => {
-            const headers = new Headers();
-            headers.set("x-trpc-source", "nextjs-react");
-            return headers;
-          },
+        splitLink({
+          condition: (op) => op.type === "subscription",
+          true: httpSubscriptionLink({
+            transformer: SuperJSON,
+            url: SERVER_ORIGIN + "/api/trpc",
+            eventSourceOptions: { withCredentials: true },
+          }),
+          false: splitLink({
+            condition: (op) =>
+              ["game.session", "game.login", "game.logout"].includes(op.path),
+            true: httpLink({
+              transformer: SuperJSON,
+              url: SERVER_ORIGIN + "/api/trpc",
+              fetch: (url, options) =>
+                fetch(url, { ...options, credentials: "include" }),
+            }),
+            false: httpBatchStreamLink({
+              transformer: SuperJSON,
+              url: SERVER_ORIGIN + "/api/trpc",
+              fetch: (url, options) =>
+                fetch(url, { ...options, credentials: "include" }),
+              headers: () => ({ "x-trpc-source": "nextjs-react" }),
+            }),
+          }),
         }),
       ],
     }),
@@ -69,10 +94,4 @@ export function TRPCReactProvider(props: { children: React.ReactNode }) {
       </api.Provider>
     </QueryClientProvider>
   );
-}
-
-function getBaseUrl() {
-  if (typeof window !== "undefined") return window.location.origin;
-  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
-  return `http://localhost:${process.env.PORT ?? 3000}`;
 }
