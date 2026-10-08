@@ -12,21 +12,28 @@ cp .env.example .env # only on a new checkout; preserve your existing .env
 pnpm dev
 ```
 
-`pnpm dev` runs the normal Next.js development server on port 3000. Do not start another server if one is already running. For a persistent classroom deployment, run `pnpm build` once, then `pnpm start --hostname 0.0.0.0 --port 3000`. Use exactly one application instance. Keep it running for the demonstration. Set the existing `DATABASE_URL` and Better Auth configuration as before; `BETTER_AUTH_SECRET` is required for production. No database migration is needed for this game.
+`pnpm dev` runs the normal Next.js development server on port 3000, using `.next` for development output. Do not start another server if one is already running. For a persistent classroom deployment, configure the production address below, run `pnpm build` once, then `pnpm start`. Use exactly one application instance. Keep it running for the demonstration. Set the existing `DATABASE_URL` and Better Auth configuration as before; `BETTER_AUTH_SECRET` is required for production. No database migration is needed for this game.
+
+`pnpm build` produces a deployable Node application in `dist/standalone`, including its traced dependencies, public files, and compiled browser assets. Copy that entire directory to the deployment host; no source checkout or dependency installation is needed there. Production builds use `dist` and leave `.next` untouched. Build-machine `.env` files are removed from the bundle; provide `DATABASE_URL`, `BETTER_AUTH_SECRET`, `GAME_OPERATOR_PASSWORD`, `NEXT_PUBLIC_PRODUCTION_IP`, and `NEXT_PUBLIC_PRODUCTION_PORT` at runtime. Use the same production IP and port as at build time. From the deployed directory, run:
+
+```sh
+node --env-file=/path/to/deployment.env start.js
+```
+
+If the host already supplies environment variables, omit `--env-file`. When running from the source checkout, `pnpm start` loads the local `.env` if present. The launcher validates the production IP and port before starting Next.js. Deploy on a compatible operating system/architecture with Node.js 22.14+.
 
 Open `/` for players and `/operator` for the dashboard. Use separate browsers, private browser profiles, or separate devices for the two players. Tabs in the same profile share one session and one seat.
 
 ## LAN configuration
 
-Edit `src/lib/game-config.ts` before the demonstration:
+Set these public variables in `.env` before building for production:
 
-```ts
-export const SERVER_ADDRESS = "192.168.1.50"; // the host computer's LAN IPv4 address
-export const SERVER_PORT = 3000;
-export const SERVER_PROTOCOL = "http";
+```dotenv
+NEXT_PUBLIC_PRODUCTION_IP="192.168.1.50"
+NEXT_PUBLIC_PRODUCTION_PORT="3000"
 ```
 
-The browser HTTP and SSE links use these constants. The default address is `localhost` for development. If changing the port, pass the same port to Next.js, for example `pnpm dev --hostname 0.0.0.0 --port 3001`. All players and the operator must open the configured origin, such as `http://192.168.1.50:3000`; they do not enter connection settings in the application. Allow that port through the host firewall and use the same LAN. Rebuild after changing constants for production. Requests from another browser origin are rejected. HTTPS deployments should set `SERVER_PROTOCOL` to `https` and the corresponding port; cookies then use `Secure`.
+Use the deployment computer's LAN IPv4 address. The production launcher binds that IP and port, and the browser HTTP and SSE links use the same values. They default to `127.0.0.1:3000` when unset. Development keeps using `localhost:3000`; production settings do not change `pnpm dev`. All players and the operator must open the configured origin, such as `http://192.168.1.50:3000`; they do not enter connection settings in the application. Allow that port through the host firewall and use the same LAN. Rebuild after changing either production variable because Next.js embeds public variables in the browser bundle. Requests from another browser origin are rejected. HTTPS deployments should set `SERVER_PROTOCOL` in `src/lib/game-config.ts` to `https` and use the externally reachable HTTPS port; cookies then use `Secure`.
 
 ## Operator setup
 

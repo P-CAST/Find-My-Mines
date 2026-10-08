@@ -24,7 +24,17 @@ export const env = createEnv({
    * `NEXT_PUBLIC_`.
    */
   client: {
-    // NEXT_PUBLIC_CLIENTVAR: z.string(),
+    NEXT_PUBLIC_PRODUCTION_IP: z
+      .string()
+      .ip({ version: "v4" })
+      .default("127.0.0.1"),
+    NEXT_PUBLIC_PRODUCTION_PORT: z
+      .string()
+      .regex(/^\d+$/)
+      .refine((value) => Number(value) >= 1 && Number(value) <= 65535, {
+        message: "Production port must be between 1 and 65535",
+      })
+      .default("3000"),
   },
 
   /**
@@ -36,6 +46,8 @@ export const env = createEnv({
     GAME_OPERATOR_PASSWORD: process.env.GAME_OPERATOR_PASSWORD,
     DATABASE_URL: process.env.DATABASE_URL,
     NODE_ENV: process.env.NODE_ENV,
+    NEXT_PUBLIC_PRODUCTION_IP: process.env.NEXT_PUBLIC_PRODUCTION_IP,
+    NEXT_PUBLIC_PRODUCTION_PORT: process.env.NEXT_PUBLIC_PRODUCTION_PORT,
   },
   /**
    * Run `build` or `dev` with `SKIP_ENV_VALIDATION` to skip env validation. This is especially
