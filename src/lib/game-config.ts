@@ -1,8 +1,9 @@
 // Next.js embeds the public production address at build time.
 // Open this same origin in every browser (including the operator's browser).
+const productionDomain = process.env.NEXT_PUBLIC_PRODUCTION_DOMAIN?.trim() ?? "";
 export const SERVER_ADDRESS =
   process.env.NODE_ENV === "production"
-    ? (process.env.NEXT_PUBLIC_PRODUCTION_IP ?? "127.0.0.1")
+    ? productionDomain || (process.env.NEXT_PUBLIC_PRODUCTION_IP ?? "127.0.0.1")
     : "localhost";
 export const SERVER_PORT =
   process.env.NODE_ENV === "production"

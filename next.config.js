@@ -11,6 +11,7 @@ const config = (phase) => ({
   distDir: phase === PHASE_DEVELOPMENT_SERVER ? ".next" : "dist",
   output: "standalone",
   env: {
+    NEXT_PUBLIC_PRODUCTION_DOMAIN: env.NEXT_PUBLIC_PRODUCTION_DOMAIN ?? "",
     NEXT_PUBLIC_PRODUCTION_IP: env.NEXT_PUBLIC_PRODUCTION_IP,
     NEXT_PUBLIC_PRODUCTION_PORT: env.NEXT_PUBLIC_PRODUCTION_PORT,
   },

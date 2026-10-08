@@ -12,6 +12,7 @@ const { config } = JSON.parse(
 await writeFile(
   "dist/standalone/production-config.json",
   JSON.stringify({
+    domain: config.env.NEXT_PUBLIC_PRODUCTION_DOMAIN,
     ip: config.env.NEXT_PUBLIC_PRODUCTION_IP,
     port: config.env.NEXT_PUBLIC_PRODUCTION_PORT,
   }),

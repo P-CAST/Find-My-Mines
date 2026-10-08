@@ -24,6 +24,14 @@ export const env = createEnv({
    * `NEXT_PUBLIC_`.
    */
   client: {
+    NEXT_PUBLIC_PRODUCTION_DOMAIN: z
+      .string()
+      .trim()
+      .regex(
+        /^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/,
+        "Use a domain hostname only, such as mines.example.com (no scheme, port, or path)",
+      )
+      .optional(),
     NEXT_PUBLIC_PRODUCTION_IP: z
       .string()
       .ip({ version: "v4" })
@@ -46,6 +54,7 @@ export const env = createEnv({
     GAME_OPERATOR_PASSWORD: process.env.GAME_OPERATOR_PASSWORD,
     DATABASE_URL: process.env.DATABASE_URL,
     NODE_ENV: process.env.NODE_ENV,
+    NEXT_PUBLIC_PRODUCTION_DOMAIN: process.env.NEXT_PUBLIC_PRODUCTION_DOMAIN,
     NEXT_PUBLIC_PRODUCTION_IP: process.env.NEXT_PUBLIC_PRODUCTION_IP,
     NEXT_PUBLIC_PRODUCTION_PORT: process.env.NEXT_PUBLIC_PRODUCTION_PORT,
   },

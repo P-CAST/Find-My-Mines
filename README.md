@@ -31,9 +31,12 @@ Set these public variables in `.env` before building for production:
 ```dotenv
 NEXT_PUBLIC_PRODUCTION_IP="192.168.1.50"
 NEXT_PUBLIC_PRODUCTION_PORT="3000"
+NEXT_PUBLIC_PRODUCTION_DOMAIN=""
 ```
 
 Use the IPv4 address players reach: the deployment computer's LAN address for a classroom or the VPS public address for an internet deployment. The launcher listens on all IPv4 interfaces (`0.0.0.0`) at the configured port. That listening address in Next.js's terminal output is normal; open the public IP printed by the launcher in your browser. The browser HTTP and SSE links use the public IP/port baked into the bundle, which default to `127.0.0.1:3000` when unset. Never set the public IP to `0.0.0.0`. Development keeps using `localhost:3000`; production settings do not change `pnpm dev`. All players and the operator must open the configured origin, such as `http://192.168.1.50:3000`; they do not enter connection settings in the application. Allow the port through the host firewall. Rebuild after changing either production variable because Next.js embeds public variables in the browser bundle. Requests from another browser origin are rejected.
+
+To use a public domain, set `NEXT_PUBLIC_PRODUCTION_DOMAIN` to a hostname such as `mines.example.com` and point its DNS record to the VPS. Use only the hostname, without a scheme, port, or path. When set, it takes priority over the IP for browser HTTP/SSE connections and the launcher's displayed URL; leave it blank to use the IP. The domain is embedded during `pnpm build` and retained in the copied bundle, so rebuild and redeploy after changing it. Node still listens on all IPv4 interfaces. All browsers must open the configured domain origin.
 
 For a reverse proxy, set `PORT` at runtime to the internal Node listening port while keeping `NEXT_PUBLIC_PRODUCTION_PORT` at the externally reachable port used when building. HTTPS deployments should set `SERVER_PROTOCOL` in `src/lib/game-config.ts` to `https`; cookies then use `Secure`. Binding port 80 directly may produce `EACCES` if the Node process lacks permission; in that case use an authorized service configuration or the VPS's existing reverse proxy.
 

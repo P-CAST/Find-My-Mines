@@ -20,15 +20,18 @@ const defaults = JSON.parse(
   readFileSync(new URL("./production-config.json", import.meta.url), "utf8"),
 );
 const ip = process.env.NEXT_PUBLIC_PRODUCTION_IP ?? defaults.ip;
+const domain =
+  process.env.NEXT_PUBLIC_PRODUCTION_DOMAIN?.trim() ?? defaults.domain ?? "";
 const port =
   process.env.PORT ?? process.env.NEXT_PUBLIC_PRODUCTION_PORT ?? defaults.port;
 
 if (
   ip !== defaults.ip ||
+  domain !== (defaults.domain ?? "") ||
   (process.env.NEXT_PUBLIC_PRODUCTION_PORT ?? defaults.port) !== defaults.port
 ) {
   throw new Error(
-    "Production address differs from the browser bundle. Run pnpm build with the intended NEXT_PUBLIC_PRODUCTION_IP and NEXT_PUBLIC_PRODUCTION_PORT, then copy the new bundle.",
+    "Production address differs from the browser bundle. Run pnpm build with the intended NEXT_PUBLIC_PRODUCTION_DOMAIN, NEXT_PUBLIC_PRODUCTION_IP, and NEXT_PUBLIC_PRODUCTION_PORT, then copy the new bundle.",
   );
 }
 
@@ -45,6 +48,6 @@ if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) {
 process.env.HOSTNAME = "0.0.0.0";
 process.env.PORT = port;
 console.log(
-  `Find My Mines: open http://${ip}:${defaults.port} (server port ${port}).`,
+  `Find My Mines: open http://${domain || ip}:${defaults.port} (server port ${port}).`,
 );
 await import(new URL("./next-server.js", import.meta.url).href);
