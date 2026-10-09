@@ -19,7 +19,8 @@
     "start": "node --env-file-if-exists=.env dist/standalone/server.js",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
-    "test:integration": "tsx scripts/verify-game.ts"
+    "test:integration": "tsx scripts/verify-game.ts",
+    "db:migrate:vps": "tsx scripts/migrate-vps.ts"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.7.2",

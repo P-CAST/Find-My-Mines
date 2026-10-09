@@ -24,6 +24,31 @@ The entrypoint loads that `.env` automatically; environment variables already su
 
 Open `/` for players and `/operator` for the dashboard. Use separate browsers, private browser profiles, or separate devices for the two players. Tabs in the same profile share one session and one seat.
 
+## Apply database migrations to the VPS
+
+For SCP deployments of `dist/standalone`, run migrations from your local source checkout through SSH:
+
+```sh
+pnpm db:migrate:vps
+```
+
+First configure these private helper variables in your local `.env`:
+
+```dotenv
+VPS_SSH_TARGET="deploy@your-vps"
+VPS_DATABASE_URL="postgresql://DB_USER:DB_PASSWORD@127.0.0.1:5432/find_my_mines"
+VPS_SSH_PORT=""
+VPS_TUNNEL_PORT="15432"
+```
+
+Use the VPS database credentials and the PostgreSQL host/port reachable from the VPS. The database must already exist. URL-encode special characters in credentials. `VPS_SSH_TARGET` also accepts an alias from `~/.ssh/config`; SSH uses your usual keys, agent, or password prompt. Leave `VPS_SSH_PORT` empty to use your SSH configuration. Change `VPS_TUNNEL_PORT` if that local port is occupied.
+
+The command waits for SSH to establish forwarding, applies pending files from `drizzle/` with the existing Drizzle configuration, and closes its tunnel on success, failure, or Ctrl+C. It supplies the tunnel URL only to the migration process; your local `DATABASE_URL` keeps its existing value. It does not deploy or restart the app. No migration tooling is needed in the copied standalone directory.
+
+For schema changes, run `pnpm db:generate`, review and commit the generated `drizzle/` files, then run `pnpm db:migrate:vps` before deploying code that requires them. Changes applied while the old app is running must remain compatible with that release. An existing database created with `db:push` needs its schema and migration history reconciled before applying an initial migration that creates those same tables.
+
+These helpers belong only in your local `.env`. The VPS runtime `DATABASE_URL` should continue to use the database address reachable directly from the VPS.
+
 ## LAN configuration
 
 Set these public variables in `.env` before building for production:
