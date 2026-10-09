@@ -1,10 +1,63 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { useRef, useState, type FormEvent } from "react";
+import { authClient } from "~/server/better-auth/client";
 
 export default function Home() {
   const [mode, setMode] = useState<"guest" | "login">("guest");
+  const [registering, setRegistering] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+  const submitting = useRef(false);
+  const router = useRouter();
+  const {
+    data: session,
+    isPending,
+    error: sessionError,
+    refetch,
+  } = authClient.useSession();
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (submitting.current) return;
+    const form = event.currentTarget;
+    const fields = new FormData(form);
+    const emailField = fields.get("email");
+    const passwordField = fields.get("password");
+    const nameField = fields.get("name");
+    const email = typeof emailField === "string" ? emailField.trim() : "";
+    const password = typeof passwordField === "string" ? passwordField : "";
+    const name = typeof nameField === "string" ? nameField.trim() : "";
+    if (registering && (!name || /[\p{C}]/u.test(name))) {
+      setError("Choose a name with 1–24 visible characters.");
+      return;
+    }
+    submitting.current = true;
+    setPending(true);
+    setError("");
+    try {
+      const result = registering
+        ? await authClient.signUp.email({ email, password, name })
+        : await authClient.signIn.email({ email, password });
+      if (result.error) {
+        setError(
+          result.error.message ?? "Unable to sign in. Please try again.",
+        );
+        return;
+      }
+      form.reset();
+      router.push("/game");
+    } catch {
+      setError(
+        "Unable to reach the server. Check your connection and try again.",
+      );
+    } finally {
+      submitting.current = false;
+      setPending(false);
+    }
+  };
 
   return (
     <main className="hero bg-base-200 text-base-content min-h-[calc(100dvh-4rem)]">
@@ -25,102 +78,203 @@ export default function Home() {
         </div>
         <div className="card bg-base-100 w-full max-w-sm shrink-0 shadow-2xl">
           <div className="card-body gap-6">
-            <div
-              role="tablist"
-              aria-label="Choose how to play"
-              className="tabs tabs-box"
-            >
-              {(["guest", "login"] as const).map((tab) => (
-                <button
-                  key={tab}
-                  type="button"
-                  role="tab"
-                  id={`${tab}-tab`}
-                  aria-controls={`${tab}-panel`}
-                  aria-selected={mode === tab}
-                  tabIndex={mode === tab ? 0 : -1}
-                  className={`tab flex-1 focus-visible:outline-2 ${mode === tab ? "tab-active" : ""}`}
-                  onClick={() => setMode(tab)}
-                  onKeyDown={(event) => {
-                    if (
-                      !["ArrowLeft", "ArrowRight", "Home", "End"].includes(
-                        event.key,
-                      )
-                    )
-                      return;
-                    event.preventDefault();
-                    const next =
-                      event.key === "Home"
-                        ? "guest"
-                        : event.key === "End"
-                          ? "login"
-                          : tab === "guest"
-                            ? "login"
-                            : "guest";
-                    setMode(next);
-                    document.getElementById(`${next}-tab`)?.focus();
-                  }}
+            {session ? (
+              <section className="space-y-4">
+                <h2 className="card-title break-words">
+                  Welcome, {session.user.name}.
+                </h2>
+                <p>
+                  Your name will be filled in at the lobby. You can change it
+                  before joining.
+                </p>
+                <Link href="/game" className="btn btn-primary w-full">
+                  Play
+                </Link>
+              </section>
+            ) : (
+              <>
+                <div
+                  role="tablist"
+                  aria-label="Choose how to play"
+                  className="tabs tabs-box"
                 >
-                  {tab === "guest" ? "Play as guest" : "Login"}
-                </button>
-              ))}
-            </div>
-            <section
-              id="guest-panel"
-              role="tabpanel"
-              aria-labelledby="guest-tab"
-              hidden={mode !== "guest"}
-              tabIndex={0}
-              className="space-y-4 focus-visible:outline-2"
-            >
-              <h2 className="card-title">Ready to play?</h2>
-              <p>
-                No account needed. Choose a nickname in the lobby and take a
-                seat.
-              </p>
-              <p>Find the most bombs to win.</p>
-              <Link href="/game" className="btn btn-primary w-full">
-                Play
-              </Link>
-            </section>
-            <section
-              id="login-panel"
-              role="tabpanel"
-              aria-labelledby="login-tab"
-              hidden={mode !== "login"}
-              tabIndex={0}
-              className="space-y-4 focus-visible:outline-2"
-            >
-              <h2 className="card-title">Login</h2>
-              <p id="login-notice">
-                Account login is coming soon. Play as a guest to get started.
-              </p>
-              <fieldset className="fieldset" aria-describedby="login-notice">
-                <label className="label" htmlFor="login-email">
-                  Email
-                </label>
-                <input
-                  id="login-email"
-                  type="email"
-                  className="input w-full"
-                  placeholder="Email"
-                  autoComplete="email"
-                />
-                <label className="label" htmlFor="login-password">
-                  Password
-                </label>
-                <input
-                  id="login-password"
-                  type="password"
-                  className="input w-full"
-                  placeholder="Password"
-                  autoComplete="current-password"
-                />
-                <button type="button" className="btn btn-neutral mt-4" disabled>
-                  Login
-                </button>
-              </fieldset>
-            </section>
+                  {(["guest", "login"] as const).map((tab) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      role="tab"
+                      id={`${tab}-tab`}
+                      aria-controls={`${tab}-panel`}
+                      aria-selected={mode === tab}
+                      disabled={pending}
+                      tabIndex={mode === tab ? 0 : -1}
+                      className={`tab flex-1 focus-visible:outline-2 ${mode === tab ? "tab-active" : ""}`}
+                      onClick={() => setMode(tab)}
+                      onKeyDown={(event) => {
+                        if (
+                          !["ArrowLeft", "ArrowRight", "Home", "End"].includes(
+                            event.key,
+                          )
+                        )
+                          return;
+                        event.preventDefault();
+                        const next =
+                          event.key === "Home"
+                            ? "guest"
+                            : event.key === "End"
+                              ? "login"
+                              : tab === "guest"
+                                ? "login"
+                                : "guest";
+                        setMode(next);
+                        document.getElementById(`${next}-tab`)?.focus();
+                      }}
+                    >
+                      {tab === "guest" ? "Play as guest" : "Login"}
+                    </button>
+                  ))}
+                </div>
+                <section
+                  id="guest-panel"
+                  role="tabpanel"
+                  aria-labelledby="guest-tab"
+                  hidden={mode !== "guest"}
+                  tabIndex={0}
+                  className="space-y-4 focus-visible:outline-2"
+                >
+                  <h2 className="card-title">Ready to play?</h2>
+                  <p>
+                    No account needed. Choose a nickname in the lobby and take a
+                    seat.
+                  </p>
+                  <p>Find the most bombs to win.</p>
+                  <Link href="/game" className="btn btn-primary w-full">
+                    Play
+                  </Link>
+                </section>
+                <section
+                  id="login-panel"
+                  role="tabpanel"
+                  aria-labelledby="login-tab"
+                  hidden={mode !== "login"}
+                  tabIndex={0}
+                  className="space-y-4 focus-visible:outline-2"
+                >
+                  <h2 className="card-title">
+                    {registering ? "Create account" : "Login"}
+                  </h2>
+                  {isPending ? (
+                    <p role="status" className="flex items-center gap-2">
+                      <span
+                        className="loading loading-spinner loading-sm"
+                        aria-hidden="true"
+                      />
+                      Checking your account…
+                    </p>
+                  ) : sessionError ? (
+                    <div role="alert" className="alert alert-error">
+                      <span>
+                        Unable to check your account. Please try again.
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() => void refetch()}
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  ) : (
+                    <form onSubmit={submit} aria-busy={pending}>
+                      <fieldset className="fieldset" disabled={pending}>
+                        {registering && (
+                          <>
+                            <label className="label" htmlFor="register-name">
+                              Name
+                            </label>
+                            <input
+                              id="register-name"
+                              name="name"
+                              type="text"
+                              className="input w-full"
+                              autoComplete="nickname"
+                              maxLength={24}
+                              required
+                            />
+                          </>
+                        )}
+                        <label className="label" htmlFor="login-email">
+                          Email
+                        </label>
+                        <input
+                          id="login-email"
+                          name="email"
+                          type="email"
+                          className="input w-full"
+                          placeholder="Email"
+                          autoComplete="email"
+                          required
+                        />
+                        <label className="label" htmlFor="login-password">
+                          Password
+                        </label>
+                        <input
+                          id="login-password"
+                          name="password"
+                          type="password"
+                          className="input w-full"
+                          placeholder="Password"
+                          autoComplete={
+                            registering ? "new-password" : "current-password"
+                          }
+                          minLength={registering ? 8 : undefined}
+                          maxLength={128}
+                          aria-describedby={
+                            registering ? "password-help" : undefined
+                          }
+                          required
+                        />
+                        {registering && (
+                          <p id="password-help">Use 8–128 characters.</p>
+                        )}
+                        {error && (
+                          <p role="alert" className="text-error">
+                            {error}
+                          </p>
+                        )}
+                        <button
+                          type="submit"
+                          className="btn btn-primary mt-4"
+                          disabled={pending}
+                        >
+                          {pending && (
+                            <span
+                              className="loading loading-spinner loading-sm"
+                              aria-hidden="true"
+                            />
+                          )}
+                          {pending
+                            ? "Please wait…"
+                            : registering
+                              ? "Create account"
+                              : "Login"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn"
+                          onClick={() => {
+                            setRegistering(!registering);
+                            setError("");
+                          }}
+                        >
+                          {registering ? "Back to login" : "Create account"}
+                        </button>
+                      </fieldset>
+                    </form>
+                  )}
+                </section>
+              </>
+            )}
           </div>
         </div>
       </div>

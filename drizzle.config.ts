@@ -8,5 +8,11 @@ export default {
   dbCredentials: {
     url: env.DATABASE_URL,
   },
-  tablesFilter: ["find my mines_*"],
+  tablesFilter: [
+    "user",
+    "session",
+    "account",
+    "verification",
+    "pg-drizzle_post",
+  ],
 } satisfies Config;

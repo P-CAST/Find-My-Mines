@@ -22,7 +22,11 @@ node server.js
 
 The entrypoint loads that `.env` automatically; environment variables already supplied by the host take precedence. To keep the file elsewhere, use `node --env-file=/path/to/deployment.env server.js`. When running from the source checkout, `pnpm start` loads the local `.env` if present. The launcher validates settings and rejects public IP/port overrides that differ from the browser bundle. Deploy on a compatible operating system/architecture with Node.js 22.14+.
 
-Open `/` for the homepage, `/game` to play as a guest, and `/operator` for the dashboard. The homepage login tab is a placeholder for future account login; players still need only a nickname. Use separate browsers, private browser profiles, or separate devices for the two players. Tabs in the same profile share one session and one seat.
+Open `/` for the homepage, `/game` to play, and `/operator` for the dashboard. Play as a guest or use the homepage Login tab to sign in or create an account. Registration asks for a name, email, and password (8–128 characters), signs you in, and opens the lobby. Your account name prefills the editable lobby nickname. Returning users see a welcome card; the navigation drawer shows the signed-in account and Logout.
+
+Accounts use Better Auth's HTTP-only session cookies and the existing PostgreSQL `user`, `account`, `session`, and `verification` tables. Configure `DATABASE_URL` and `BETTER_AUTH_SECRET`; Better Auth uses the same canonical origin as the game. For a fresh database, apply the existing Drizzle migrations with `pnpm db:migrate` before using accounts. Do not reapply the initial migration to a database already created with `db:push` without reconciling its migration history. No new schema is needed for the account interface. Email verification, password recovery, and social login are not configured.
+
+Game seats remain tied to browser game sessions: account login does not claim or transfer a seat, and Logout signs out of the account without changing the game credential. Accounts do not grant operator permissions. Use separate browsers, private browser profiles, or separate devices for the two players. Tabs in the same profile share one game session and one seat. Matchmaking, multiple simultaneous games, and persistent game history are future work.
 
 ## Apply database migrations to the VPS
 

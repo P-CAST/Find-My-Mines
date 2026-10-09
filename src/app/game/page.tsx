@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { api } from "~/trpc/react";
+import { authClient } from "~/server/better-auth/client";
 import {
   ConnectionStatus,
   GameCell,
@@ -13,6 +14,7 @@ import {
 import type { GameSnapshot } from "~/server/game/service";
 
 export default function GamePage() {
+  const { data: accountSession } = authClient.useSession();
   const session = api.game.session.useQuery(undefined, {
     staleTime: Infinity,
     retry: false,
@@ -94,7 +96,15 @@ export default function GamePage() {
     void session.refetch();
     resetSubscription();
   };
-  const [nickname, setNickname] = useState("");
+  const [editedNickname, setNickname] = useState<string>();
+  // An explicit edit (including clearing the field) always wins over a late session response.
+  const nickname =
+    editedNickname ??
+    (accountSession?.user.name ?? "")
+      .trim()
+      .slice(0, 24)
+      .replace(/[\p{C}]/gu, "")
+      .trim();
   const [elapsed, setElapsed] = useState(false);
   const onError = (cause: { message: string }) => setError(cause.message);
   const join = api.game.join.useMutation({

@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { Geist } from "next/font/google";
 
 import { TRPCReactProvider } from "~/trpc/react";
+import { authClient } from "~/server/better-auth/client";
 
 const geist = Geist({
   subsets: ["latin"],
@@ -21,6 +22,40 @@ export default function RootLayout({
   const trigger = useRef<HTMLButtonElement>(null);
   const drawer = useRef<HTMLDivElement>(null);
   const pathname = usePathname();
+  const {
+    data: session,
+    isPending,
+    error: sessionError,
+    refetch,
+  } = authClient.useSession();
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [logoutError, setLogoutError] = useState("");
+  const signingOut = useRef(false);
+
+  const logout = async () => {
+    if (signingOut.current) return;
+    signingOut.current = true;
+    setLoggingOut(true);
+    setLogoutError("");
+    try {
+      const result = await authClient.signOut();
+      if (result.error) {
+        setLogoutError(
+          result.error.message ?? "Unable to log out. Please try again.",
+        );
+        return;
+      }
+      // A full navigation also clears any account-specific query data in memory.
+      window.location.assign("/");
+    } catch {
+      setLogoutError(
+        "Unable to reach the server. Check your connection and try again.",
+      );
+    } finally {
+      signingOut.current = false;
+      setLoggingOut(false);
+    }
+  };
 
   const close = () => {
     setOpen(false);
@@ -116,7 +151,7 @@ export default function RootLayout({
                 if (event.key === "Tab") {
                   const controls =
                     drawer.current?.querySelectorAll<HTMLElement>(
-                      "button, a[href]",
+                      "button:not(:disabled), a[href]",
                     );
                   const first = controls?.[0];
                   const last = controls?.[controls.length - 1];
@@ -186,6 +221,51 @@ export default function RootLayout({
                     </li>
                   ))}
                 </ul>
+                <div className="border-base-300 mt-4 space-y-3 border-t pt-4">
+                  {isPending ? (
+                    <p role="status">Checking your account…</p>
+                  ) : sessionError ? (
+                    <div role="alert" className="space-y-2">
+                      <p className="text-error">
+                        Unable to check your account.
+                      </p>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() => void refetch()}
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  ) : session ? (
+                    <>
+                      <p className="break-words">
+                        Signed in as <strong>{session.user.name}</strong>
+                      </p>
+                      <button
+                        type="button"
+                        className="btn w-full"
+                        disabled={loggingOut}
+                        onClick={() => void logout()}
+                      >
+                        {loggingOut && (
+                          <span
+                            className="loading loading-spinner loading-sm"
+                            aria-hidden="true"
+                          />
+                        )}
+                        {loggingOut ? "Logging out…" : "Logout"}
+                      </button>
+                      {logoutError && (
+                        <p role="alert" className="text-error">
+                          {logoutError}
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <p>Playing as a guest</p>
+                  )}
+                </div>
               </nav>
             </div>
           </div>
