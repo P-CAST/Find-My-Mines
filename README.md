@@ -22,7 +22,7 @@ node server.js
 
 The entrypoint loads that `.env` automatically; environment variables already supplied by the host take precedence. To keep the file elsewhere, use `node --env-file=/path/to/deployment.env server.js`. When running from the source checkout, `pnpm start` loads the local `.env` if present. The launcher validates settings and rejects public IP/port overrides that differ from the browser bundle. Deploy on a compatible operating system/architecture with Node.js 22.14+.
 
-Open `/` for players and `/operator` for the dashboard. Use separate browsers, private browser profiles, or separate devices for the two players. Tabs in the same profile share one session and one seat.
+Open `/` for the homepage, `/game` to play as a guest, and `/operator` for the dashboard. The homepage login tab is a placeholder for future account login; players still need only a nickname. Use separate browsers, private browser profiles, or separate devices for the two players. Tabs in the same profile share one session and one seat.
 
 ## Apply database migrations to the VPS
 
@@ -110,7 +110,7 @@ The integration check reads the operator password from `.env` (or the environmen
 
 Demo checklist:
 
-1. Open the player URL in two independent browser sessions; open `/operator` in a third.
+1. Open `/game` in two independent browser sessions; open `/operator` in a third.
 2. Join with two nicknames; confirm both boards/scores agree and both welcome messages appear. Confirm a third session cannot take a seat.
 3. Select cells: bombs preserve time, empty cells pass play. Wait without clicking and observe a server-driven turn change in both browsers.
 4. Finish finding 11 bombs; confirm Win/Lost, scores, two votes, and winner-first rematch.

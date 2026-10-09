@@ -1,26 +1,12 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
 import type { GameSnapshot, PublicCell } from "~/server/game/service";
 
 export function PageShell({ children }: { children: ReactNode }) {
   return (
-    <main className="bg-base-200 text-base-content min-h-screen">
+    <main className="bg-base-200 text-base-content min-h-[calc(100dvh-4rem)]">
       <div className="mx-auto max-w-5xl px-4 py-6 sm:px-8">
-        <header className="mb-8 flex flex-wrap items-center justify-between gap-3">
-          <Link href="/" className="text-2xl font-bold focus-visible:outline-2">
-            Find My Mines
-          </Link>
-          <nav className="flex gap-2" aria-label="Main">
-            <Link href="/" className="btn btn-ghost btn-sm">
-              Play
-            </Link>
-            <Link href="/operator" className="btn btn-ghost btn-sm">
-              Operator
-            </Link>
-          </nav>
-        </header>
         {children}
         <footer className="mt-8 text-sm">
           Two players · 36 cells · 11 bombs · 10 seconds per turn

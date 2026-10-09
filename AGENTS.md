@@ -2,6 +2,10 @@
 
 Preserve the existing Next.js App Router, tRPC, Drizzle/PostgreSQL, and stable dependency versions. Do not introduce Prisma, Pages Router, canary packages, or additional infrastructure.
 
+## Component organization
+
+Do not create a separate component file for a component used by only one other file. Keep its JSX and logic in the consuming page or layout. Apply the same rule to single-use hooks; extract shared components or hooks only when they have multiple actual consumers, not for hypothetical reuse or abstraction alone.
+
 ## Development server
 
 Use the user's already-running development server for testing whenever possible so the user can see its logs in their own terminal. Do not stop, restart, replace, or interfere with that server or any process listening on port 3000. Do not start a duplicate server through internal terminal tooling when the existing server can serve the same purpose.
