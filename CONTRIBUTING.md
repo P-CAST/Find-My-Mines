@@ -1,6 +1,6 @@
 # Contributor conventions
 
-Keep the existing Next.js App Router, tRPC, Better Auth, and Drizzle/PostgreSQL stack. Preserve stable installed dependency versions. Use the existing pnpm lockfile and startup commands. Do not add another backend, WebSockets, game worker, cron, ORM, or infrastructure service for this single-match game.
+Keep the existing Next.js App Router, tRPC, Better Auth, and Drizzle/PostgreSQL stack. Preserve stable installed dependency versions. Use the existing pnpm lockfile and startup commands. Do not add another backend, WebSockets, game worker, cron, ORM, or infrastructure service for this single-process, multi-room game.
 
 ## Interface
 
@@ -10,7 +10,7 @@ Reuse the six small components in `src/app/_components/game/ui.tsx`: `PageShell`
 
 ## Game architecture
 
-Expose game procedures in `src/server/api/routers/game.ts` and register in the existing root router. Keep all authoritative transitions synchronous in `src/server/game/service.ts`; never await between validation and changes. Hidden boards stay server-side. Only import public service types into browser modules with `import type`. Keep server-issued session credentials in HTTP-only cookies. A public UUID or nickname is not authentication. Enforce operator authorization in procedures.
+Expose game procedures in `src/server/api/routers/game.ts` and register in the existing root router. Keep all authoritative transitions synchronous in `src/server/game/service.ts`; never await between validation and changes. Capture account-only terminal results synchronously; save results and replays atomically outside transitions with idempotent match IDs. Never persist game records involving guests. Keep room state isolated by room ID and account/guest ownership derived from verified cookies. Hidden boards stay server-side; replay frames contain only public states. Only import public service types into browser modules with `import type`. Keep server-issued session credentials in HTTP-only cookies. A public UUID or nickname is not authentication. Enforce operator authorization in procedures.
 
 Use HTTP mutations for commands and SSE for updates through the same Node route. Keep SuperJSON, existing HTTP batching, and unrelated auth/post procedures. Bootstrap/auth calls require nonstreaming HTTP responses to set cookies. Register update listeners before snapshots; send full snapshots on reconnect; clean listeners on cancellation/lease expiry; guard UI state with revisions. Do not send countdown ticks. Maintain session-level presence with reference-counted streams and a lease; never treat operator streams as game clients.
 
@@ -18,4 +18,4 @@ Retain one global game service under development reloads. Do not assume globals 
 
 ## Verification
 
-Run `pnpm check`. Add focused behavioral tests for meaningful rule changes. `pnpm test:integration` uses the existing server and requires an empty lobby; it verifies actual HTTP/SSE fanout, autonomous timers, presence, reconnects, and operator controls. Never stop/restart the user's development server or run an unisolated duplicate. Do not run a production build into the running dev server's `.next` output; use a separate temporary checkout/output for build verification if needed.
+Run `pnpm check`. Add focused behavioral tests for meaningful rule changes. `pnpm test:integration` uses the existing server and requires no rooms or queued players; it verifies actual HTTP/SSE fanout, autonomous timers, presence, reconnects, room isolation, forfeits, and operator controls. The opt-in PostgreSQL test (`GAME_TEST_DATABASE=1 pnpm exec tsx --env-file=.env --test tests/history.test.ts`) uses rolled-back temporary tables to check result/replay persistence and privacy. Never stop/restart the user's development server or run an unisolated duplicate. Do not run a production build into the running dev server's `.next` output; use a separate temporary checkout/output for build verification if needed.

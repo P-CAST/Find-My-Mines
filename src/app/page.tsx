@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useRef, useState, type FormEvent } from "react";
 import { authClient } from "~/server/better-auth/client";
 
@@ -11,7 +10,6 @@ export default function Home() {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const submitting = useRef(false);
-  const router = useRouter();
   const {
     data: session,
     isPending,
@@ -48,7 +46,7 @@ export default function Home() {
         return;
       }
       form.reset();
-      router.push("/game");
+      window.location.assign("/game");
     } catch {
       setError(
         "Unable to reach the server. Check your connection and try again.",

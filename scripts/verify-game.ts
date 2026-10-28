@@ -9,7 +9,11 @@ import {
 } from "@trpc/client";
 import superjson from "superjson";
 import type { AppRouter } from "../src/server/api/root";
-import type { ClientsSnapshot, GameSnapshot } from "../src/server/game/service";
+import type {
+  ClientsSnapshot,
+  GameSnapshot,
+  LobbySnapshot,
+} from "../src/server/game/service";
 import { SERVER_ORIGIN } from "../src/lib/game-config";
 
 const origin = process.env.GAME_TEST_ORIGIN ?? SERVER_ORIGIN;
@@ -55,11 +59,18 @@ function client() {
   });
   return { api, transport };
 }
-async function stream<T>(owner: ReturnType<typeof client>, path: string) {
+async function stream<T>(
+  owner: ReturnType<typeof client>,
+  path: string,
+  input?: unknown,
+) {
   const abort = new AbortController();
-  const response = await owner.transport(`${origin}/api/trpc/${path}`, {
-    signal: abort.signal,
-  });
+  const response = await owner.transport(
+    `${origin}/api/trpc/${path}${input === undefined ? "" : `?input=${encodeURIComponent(JSON.stringify(superjson.serialize(input)))}`}`,
+    {
+      signal: abort.signal,
+    },
+  );
   assert.equal(response.headers.get("content-type"), "text/event-stream");
   assert.equal(response.headers.get("x-accel-buffering"), "no");
   assert.match(response.headers.get("cache-control")!, /no-transform/);
@@ -127,170 +138,177 @@ async function until<T>(
   }
   throw new Error(`Timed out: ${label}`);
 }
-const a = client();
-const b = client();
-const visitor = client();
+const players = [client(), client(), client(), client()];
+const [a, b, c, d] = players as [
+  ReturnType<typeof client>,
+  ReturnType<typeof client>,
+  ReturnType<typeof client>,
+  ReturnType<typeof client>,
+];
 const op = client();
 const closers: (() => Promise<void>)[] = [];
 const beats: ReturnType<typeof setInterval>[] = [];
-let ownsMatch = false;
+const roomScopes = new Map<ReturnType<typeof client>, string>();
+const owned: { owner: ReturnType<typeof client>; roomId: string }[] = [];
 try {
-  const [sa, sb] = await Promise.all([
-    a.api.game.session.query(),
-    b.api.game.session.query(),
-    visitor.api.game.session.query(),
-    op.api.game.session.query(),
-  ]);
-  assert.notEqual(sa.id, sb.id);
-  await assert.rejects(a.api.game.reset.mutate(), /Operator login/);
-  await assert.rejects(a.api.game.start.mutate(), /Operator login/);
+  await Promise.all([...players, op].map((c) => c.api.game.session.query()));
+  const dummy = { roomId: "00000000-0000-0000-0000-000000000000" };
+  await assert.rejects(a.api.game.reset.mutate(dummy), /Operator login/);
+  await assert.rejects(a.api.game.start.mutate(dummy), /Operator login/);
   await op.api.game.login.mutate({ password });
-  assert.equal((await op.api.game.session.query()).operator, true);
   const dashboard = await stream<ClientsSnapshot>(op, "game.onClients");
   closers.push(dashboard.close);
   const initial = await until(() => dashboard.latest(), "operator snapshot");
   assert.equal(
-    initial.game.players.length,
+    initial.rooms.length,
     0,
-    "Integration verification requires an empty lobby; it will not reset another match.",
+    "Integration verification requires an empty lobby; it will not change another room.",
+  );
+  assert.equal(
+    initial.queued,
+    0,
+    "Integration verification requires an empty queue.",
   );
   const baseline = initial.count;
-  const aState = await stream<GameSnapshot>(a, "game.onState");
-  closers.push(aState.close);
-  let bState = await stream<GameSnapshot>(b, "game.onState");
-  closers.push(bState.close);
-  const visitorState = await stream<GameSnapshot>(visitor, "game.onState");
-  closers.push(visitorState.close);
-  for (const c of [a, b, visitor])
+  for (const player of players) {
+    const lobby = await stream<LobbySnapshot>(player, "game.onLobby");
+    closers.push(lobby.close);
+    await until(() => lobby.latest(), "lobby connection");
     beats.push(
       setInterval(() => {
-        void c.api.game.heartbeat.mutate().catch(() => undefined);
+        void player.api.game.heartbeat.mutate({}).catch(() => undefined);
+        const roomId = roomScopes.get(player);
+        if (roomId)
+          void player.api.game.heartbeat
+            .mutate({ roomId })
+            .catch(() => undefined);
       }, 4000),
     );
+  }
+  const first = await a.api.game.create.mutate({
+    nickname: "HTTP Alice",
+    visibility: "public",
+  });
+  owned.push({ owner: a, roomId: first.roomId });
+  const second = await c.api.game.create.mutate({
+    nickname: "HTTP Carol",
+    visibility: "unlisted",
+  });
+  owned.push({ owner: c, roomId: second.roomId });
+  const aState = await stream<GameSnapshot>(a, "game.onState", first);
+  closers.push(aState.close);
+  let bState = await stream<GameSnapshot>(b, "game.onState", first);
+  closers.push(bState.close);
+  const cState = await stream<GameSnapshot>(c, "game.onState", second);
+  closers.push(cState.close);
+  const dState = await stream<GameSnapshot>(d, "game.onState", second);
+  closers.push(dState.close);
   await until(
-    () => aState.latest() && bState.latest() && visitorState.latest(),
-    "three initial snapshots",
+    () =>
+      aState.latest() && bState.latest() && cState.latest() && dState.latest(),
+    "room snapshots",
   );
-  await until(
-    () => dashboard.latest()?.count === baseline + 3,
-    "unique client count excludes operator stream",
-  );
-  ownsMatch = true;
-  await a.api.game.join.mutate({ nickname: "HTTP Alice" });
-  let joined = await b.api.game.join.mutate({ nickname: "HTTP Bob" });
-  if (joined.manualStart) joined = await op.api.game.start.mutate();
+  roomScopes.set(a, first.roomId);
+  roomScopes.set(b, first.roomId);
+  roomScopes.set(c, second.roomId);
+  roomScopes.set(d, second.roomId);
+  const joined = await b.api.game.join.mutate({
+    ...first,
+    nickname: "HTTP Bob",
+  });
+  owned.push({ owner: b, roomId: first.roomId });
+  const otherRoom = await d.api.game.join.mutate({
+    ...second,
+    nickname: "HTTP Dana",
+  });
+  owned.push({ owner: d, roomId: second.roomId });
   assert.equal(joined.phase, "active");
+  assert.equal(otherRoom.phase, "active");
+  assert.equal(joined.instanceId, otherRoom.instanceId);
   await until(
     () =>
       aState.latest()?.revision === joined.revision &&
       bState.latest()?.revision === joined.revision,
-    "both SSE clients observe HTTP joins",
+    "join fanout",
   );
-  assert.equal(joined.instanceId, sa.instanceId);
-  assert.equal(joined.instanceId, sb.instanceId);
-  await assert.rejects(
-    visitor.api.game.join.mutate({ nickname: "Third" }),
-    /Game full/,
+  await until(
+    () => dashboard.latest()?.count === baseline + 4,
+    "session reference counts",
   );
-  const active = joined.activePlayer === sa.id ? a : b;
+  const aid = aState.latest()!.viewerId!,
+    bid = bState.latest()!.viewerId!;
+  const active = joined.activePlayer === aid ? a : b;
   const other = active === a ? b : a;
   const input = {
+    ...first,
     matchId: joined.matchId,
     turnId: joined.turnId,
     cellIndex: 0,
   };
   await assert.rejects(other.api.game.reveal.mutate(input), /not your turn/);
-  const revealed = await active.api.game.reveal.mutate(input);
+  await assert.rejects(c.api.game.reveal.mutate(input), /seat/);
+  const reveal = await active.api.game.reveal.mutate(input);
   await until(
     () =>
-      aState.latest()?.revision === revealed.revision &&
-      bState.latest()?.revision === revealed.revision,
-    "HTTP reveal fans out to both SSE clients",
+      aState.latest()?.revision === reveal.revision &&
+      bState.latest()?.revision === reveal.revision,
+    "reveal fanout",
   );
-  await assert.rejects(active.api.game.reveal.mutate(input));
-  const beforeTimeout = aState.latest()!;
-  const timedOut = await until(
-    () => {
-      const s = aState.latest();
-      return s && s.turnId !== beforeTimeout.turnId && s;
-    },
-    "server timer with no action requests",
+  assert.ok(cState.latest()!.cells.every((cell) => cell.kind === "covered"));
+  const turnId = aState.latest()!.turnId;
+  await until(
+    () => aState.latest()?.turnId !== turnId,
+    "autonomous turn timer",
     12000,
-  );
-  assert.notEqual(timedOut.activePlayer, beforeTimeout.activePlayer);
-  console.log(
-    "PASS: HTTP mutations and both SSE streams share one authority; timer advances without action requests.",
   );
   await bState.close();
   await until(
     () =>
-      aState.latest()?.players.find((p) => p.id === sb.id)?.connected === false,
-    "normal close presence cleanup",
+      aState.latest()?.players.find((p) => p.id === bid)?.connected === false,
+    "room close despite lobby stream",
   );
-  bState = await stream<GameSnapshot>(b, "game.onState");
+  bState = await stream<GameSnapshot>(b, "game.onState", first);
   closers.push(bState.close);
-  const reconnected = await until(
-    () => bState.latest(),
-    "fresh reconnect snapshot",
-  );
-  assert.equal(reconnected.matchId, joined.matchId);
-  assert.ok(reconnected.revision >= timedOut.revision);
-  const duplicateTab = await stream<GameSnapshot>(a, "game.onState");
-  closers.push(duplicateTab.close);
-  await until(() => duplicateTab.latest(), "second tab initial snapshot");
-  assert.equal(dashboard.latest()!.count, baseline + 3);
-  await duplicateTab.close();
-  const reset = await op.api.game.reset.mutate();
   await until(
-    () =>
-      aState.latest()?.revision === reset.revision &&
-      bState.latest()?.revision === reset.revision,
-    "reset fanout",
+    () => bState.latest()?.players.find((p) => p.id === bid)?.connected,
+    "reconnect",
   );
+  assert.equal(bState.latest()!.matchId, joined.matchId);
+  const duplicate = await stream<GameSnapshot>(a, "game.onState", first);
+  closers.push(duplicate.close);
+  await until(() => duplicate.latest(), "duplicate tab");
+  assert.equal(dashboard.latest()!.count, baseline + 4);
+  await duplicate.close();
+  const reset = await op.api.game.reset.mutate(first);
   assert.equal(reset.phase, "lobby");
   assert.equal(reset.players.length, 2);
-  assert.ok(reset.cells.every((c) => c.kind === "covered"));
-  await assert.rejects(active.api.game.reveal.mutate(input), /not active/);
-  const started = await op.api.game.start.mutate();
+  assert.equal(cState.latest()!.matchId, otherRoom.matchId);
+  const started = await op.api.game.start.mutate(first);
   assert.equal(started.phase, "active");
-  assert.notEqual(started.matchId, joined.matchId);
-  await until(
-    () =>
-      aState.latest()?.revision === started.revision &&
-      bState.latest()?.revision === started.revision,
-    "operator start fanout",
-  );
-  console.log(
-    "PASS: reconnection, reference-counted tabs, operator authorization, reset and start.",
-  );
-  // An open response without client heartbeats must still lose its presence lease.
   clearInterval(beats[1]);
   await until(
     () =>
-      aState.latest()?.players.find((p) => p.id === sb.id)?.connected === false,
-    "abrupt loss lease expiry",
+      aState.latest()?.players.find((p) => p.id === bid)?.connected === false,
+    "lease expiry",
     18000,
   );
   await until(
-    () =>
-      aState.latest()?.phase === "lobby" &&
-      aState.latest()?.players.length === 1,
-    "disconnect grace abort",
+    () => aState.latest()?.resultReason === "forfeit",
+    "forfeit after grace",
     18000,
   );
-  const aborted = aState.latest()!;
-  assert.equal(aborted.winner, null);
-  assert.equal(aborted.deadline, null);
-  assert.equal(aborted.players[0]!.score, 0);
-  console.log(
-    "PASS: missing heartbeats expire presence, reserve the seat, then abort without an artificial win.",
-  );
+  assert.equal(aState.latest()!.winner, aid);
+  assert.equal(aState.latest()!.saveStatus, "unrecorded");
   await op.api.game.logout.mutate();
-  assert.equal((await op.api.game.session.query()).operator, false);
-  await assert.rejects(op.api.game.reset.mutate(), /Operator login/);
+  await assert.rejects(op.api.game.reset.mutate(first), /Operator login/);
+  console.log(
+    "PASS: two isolated rooms, HTTP/SSE fanout, server timers, duplicate tabs, reconnect, operator controls, and unrecorded guest forfeit.",
+  );
 } finally {
   beats.forEach(clearInterval);
+  for (const { owner, roomId } of owned)
+    await owner.api.game.leave.mutate({ roomId }).catch(() => undefined);
+  for (const owner of players)
+    await owner.api.game.queueCancel.mutate().catch(() => undefined);
   await Promise.all(closers.map((close) => close()));
-  // Let the ordinary grace policy release our seats and restore the automatic lobby.
-  if (ownsMatch) await new Promise((resolve) => setTimeout(resolve, 16_000));
 }

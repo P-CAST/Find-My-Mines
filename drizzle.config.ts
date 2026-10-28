@@ -13,6 +13,8 @@ export default {
     "session",
     "account",
     "verification",
-    "pg-drizzle_post",
+    "post",
+    "game_profile",
+    "game_result",
   ],
 } satisfies Config;

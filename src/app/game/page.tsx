@@ -1,346 +1,203 @@
 "use client";
-import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import { api } from "~/trpc/react";
-import { authClient } from "~/server/better-auth/client";
-import {
-  ConnectionStatus,
-  GameCell,
-  PageShell,
-  Panel,
-  PlayerScore,
-  TurnTimer,
-  type Connection,
-} from "~/app/_components/game/ui";
-import type { GameSnapshot } from "~/server/game/service";
+import { ConnectionStatus, PageShell, Panel } from "~/app/_components/game/ui";
+import { useGameConnection } from "~/app/_components/game/use-game-connection";
 
-export default function GamePage() {
-  const { data: accountSession } = authClient.useSession();
-  const session = api.game.session.useQuery(undefined, {
-    staleTime: Infinity,
-    retry: false,
-    refetchOnWindowFocus: false,
-  });
-  const [state, setState] = useState<GameSnapshot>();
-  const [connection, setConnection] = useState<Connection>("reconnecting");
-  const [offset, setOffset] = useState(0);
-  const [error, setError] = useState("");
-  const utils = api.useUtils();
-  const subscription = api.game.onState.useSubscription(undefined, {
-    enabled: !!session.data,
-    onData(snapshot) {
-      if (session.data?.instanceId !== snapshot.instanceId)
-        void session.refetch();
-      setState((previous) =>
-        previous?.instanceId !== snapshot.instanceId ||
-        snapshot.revision >= previous.revision
-          ? snapshot
-          : previous,
-      );
-      setOffset(snapshot.serverNow - Date.now());
-      setConnection("connected");
-    },
-    onError(cause) {
-      setConnection("disconnected");
-      setError(cause.message);
-    },
-  });
-  const resetSubscription = subscription.reset;
-  useEffect(() => {
-    if (subscription.status === "connecting") setConnection("reconnecting");
-    if (subscription.status === "error" || subscription.status === "idle")
-      setConnection("disconnected");
-  }, [subscription.status]);
-  useEffect(() => {
-    if (subscription.status !== "idle" || !session.data) return;
-    const timer = setTimeout(resetSubscription, 1000);
-    return () => clearTimeout(timer);
-  }, [subscription.status, session.data, resetSubscription]);
-  useEffect(() => {
-    if (connection !== "connected") return;
-    let cancelled = false;
-    const beat = async () => {
-      const before = Date.now();
-      try {
-        const timing = await utils.client.game.heartbeat.mutate();
-        if (!cancelled) setOffset(timing.serverNow - (before + Date.now()) / 2);
-      } catch {
-        if (!cancelled) {
-          setConnection("reconnecting");
-          resetSubscription();
-        }
-      }
-    };
-    void beat();
-    const timer = setInterval(() => {
-      void beat();
-    }, 5000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [connection, utils.client, resetSubscription]);
-  useEffect(() => {
-    const offline = () => setConnection("disconnected");
-    const online = () => {
-      setConnection("reconnecting");
-      resetSubscription();
-    };
-    window.addEventListener("offline", offline);
-    window.addEventListener("online", online);
-    return () => {
-      window.removeEventListener("offline", offline);
-      window.removeEventListener("online", online);
-    };
-  }, [resetSubscription]);
-  const retry = () => {
-    void session.refetch();
-    resetSubscription();
-  };
-  const [editedNickname, setNickname] = useState<string>();
-  // An explicit edit (including clearing the field) always wins over a late session response.
-  const nickname =
-    editedNickname ??
-    (accountSession?.user.name ?? "")
-      .trim()
-      .slice(0, 24)
-      .replace(/[\p{C}]/gu, "")
-      .trim();
-  const [elapsed, setElapsed] = useState(false);
+export default function GameLobby() {
+  const {
+    lobby,
+    account,
+    connection,
+    error,
+    setError,
+    retry,
+    nickname,
+    setNickname,
+  } = useGameConnection();
+  const router = useRouter();
+  const [visibility, setVisibility] = useState<"public" | "unlisted">("public");
+  const waiting = useRef(false);
   const onError = (cause: { message: string }) => setError(cause.message);
-  const join = api.game.join.useMutation({
+  const create = api.game.create.useMutation({
     onError,
-    onSuccess: () => setError(""),
+    onSuccess: (result) => router.push(`/game/${result.roomId}`),
   });
-  const reveal = api.game.reveal.useMutation({
+  const queue = api.game.queueJoin.useMutation({
     onError,
-    onSuccess: () => setError(""),
+    onSuccess: (result) => {
+      waiting.current = true;
+      if (result.roomId) router.push(`/game/${result.roomId}`);
+    },
   });
-  const rematch = api.game.rematch.useMutation({
+  const cancel = api.game.queueCancel.useMutation({
     onError,
-    onSuccess: () => setError(""),
+    onSuccess: () => {
+      waiting.current = false;
+    },
   });
-  const me = state?.players.find((p) => p.id === session.data?.id);
-  const connected = connection === "connected";
-  const canReveal =
-    connected &&
-    state?.phase === "active" &&
-    state.activePlayer === me?.id &&
-    !reveal.isPending &&
-    !elapsed;
-  const activeName = state?.players.find(
-    (p) => p.id === state.activePlayer,
-  )?.nickname;
+  useEffect(() => {
+    if (lobby?.queuedAt != null) waiting.current = true;
+    if (waiting.current && lobby?.roomId) {
+      waiting.current = false;
+      router.push(`/game/${lobby.roomId}`);
+    }
+  }, [lobby, router]);
+  const queued = lobby?.queuedAt != null;
+  const busy =
+    connection !== "connected" ||
+    create.isPending ||
+    queue.isPending ||
+    cancel.isPending ||
+    !nickname.trim();
   return (
     <PageShell>
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-3xl font-bold">Find the bombs. Keep the turn.</h1>
-          <p className="mt-2">
-            Every bomb is a point. An empty cell passes play.
-          </p>
-        </div>
-        <ConnectionStatus
-          status={session.error ? "disconnected" : connection}
-        />
+        <h1 className="text-3xl font-bold">Game lobby</h1>
+        <ConnectionStatus status={connection} />
       </div>
-      {(error || session.error) && (
-        <div role="alert" className="alert alert-error mb-4">
-          <span>{error || session.error?.message}</span>
-          <button
-            className="btn btn-sm"
-            onClick={() => {
-              setError("");
-              retry();
-            }}
-          >
+      {error && (
+        <div className="alert alert-error mb-4" role="alert">
+          <span>{error}</span>
+          <button className="btn btn-sm" onClick={retry}>
             Retry connection
           </button>
         </div>
       )}
-      {!state ? (
-        <Panel title="Connecting to the game">
-          <span className="loading loading-spinner" />
-          <p>Establishing your player session…</p>
-        </Panel>
-      ) : (
-        <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_18rem]">
-          <div className="space-y-5">
-            {state.phase === "lobby" && (
-              <Panel title={me ? `Welcome, ${me.nickname}.` : "Take a seat"}>
-                <p role="status">{state.message}</p>
-                {!me && (
-                  <form
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      join.mutate({ nickname });
-                    }}
-                  >
-                    <fieldset className="fieldset">
-                      <legend className="fieldset-legend">Your nickname</legend>
-                      <input
-                        className="input w-full"
-                        aria-label="Nickname"
-                        value={nickname}
-                        onChange={(event) => setNickname(event.target.value)}
-                        maxLength={24}
-                        required
-                        autoComplete="nickname"
-                      />
-                      <p className="label">
-                        1–24 characters. No sign-in required.
-                      </p>
-                      <button
-                        className="btn btn-primary mt-2"
-                        disabled={
-                          !connected ||
-                          join.isPending ||
-                          !nickname.trim() ||
-                          state.players.length === 2
-                        }
-                      >
-                        {join.isPending ? (
-                          <span className="loading loading-spinner loading-sm" />
-                        ) : (
-                          "Join"
-                        )}
-                      </button>
-                      {state.players.length === 2 && (
-                        <p className="text-error">
-                          Game full. Both seats are reserved.
-                        </p>
-                      )}
-                    </fieldset>
-                  </form>
-                )}
-                {me && (
+      <div className="grid gap-5 md:grid-cols-2">
+        <Panel title="Play a game">
+          <p>Find an opponent or create a room to challenge a friend.</p>
+          {lobby?.roomId ? (
+            <>
+              <p>You already have a seat in a room.</p>
+              <Link className="btn btn-primary" href={`/game/${lobby.roomId}`}>
+                Resume game
+              </Link>
+            </>
+          ) : (
+            <>
+              <label className="fieldset">
+                <span className="fieldset-legend">Your nickname</span>
+                <input
+                  className="input w-full"
+                  maxLength={24}
+                  value={nickname}
+                  onChange={(e) => setNickname(e.target.value)}
+                  disabled={queued}
+                  autoComplete="nickname"
+                />
+              </label>
+              {queued ? (
+                <div role="status" className="space-y-3">
                   <p>
-                    {state.manualStart
-                      ? "The operator will start when both players are connected."
-                      : "The match starts automatically when the second player joins."}
+                    <span className="loading loading-spinner loading-sm mr-2" />
+                    Finding an opponent…
                   </p>
-                )}
-              </Panel>
-            )}
-            {state.phase !== "lobby" && (
-              <Panel
-                title={me ? `Welcome, ${me.nickname}.` : "Match in progress"}
-              >
-                {!me && (
-                  <div className="alert alert-info">
-                    Game full. You can watch this match.
-                  </div>
-                )}
-                {state.phase === "active" ? (
-                  <>
-                    <p role="status" className="text-lg font-semibold">
-                      {state.activePlayer === me?.id
-                        ? "Your turn"
-                        : `${activeName}'s turn`}
-                    </p>
-                    <TurnTimer
-                      key={state.turnId}
-                      deadline={state.deadline!}
-                      offset={offset}
-                      onElapsed={setElapsed}
-                    />
-                  </>
-                ) : (
-                  <div className="space-y-3" role="status">
-                    <h2 className="text-3xl font-bold">
-                      {me
-                        ? state.winner === me.id
-                          ? "Win"
-                          : "Lost"
-                        : "Match finished"}
-                    </h2>
-                    <p>{state.message}</p>
-                    {me && (
-                      <button
-                        className="btn btn-primary"
-                        disabled={
-                          !connected ||
-                          rematch.isPending ||
-                          state.rematchVotes.includes(me.id)
-                        }
-                        onClick={() =>
-                          rematch.mutate({ matchId: state.matchId })
-                        }
-                      >
-                        Rematch
-                      </button>
-                    )}
-                    <p>
-                      {state.rematchVotes.length}/2 players voted for a rematch.
-                      The previous winner starts.
-                    </p>
-                  </div>
-                )}
-                <div
-                  className="grid grid-cols-6 gap-2"
-                  aria-label="Six by six bomb board"
-                >
-                  {state.cells.map((cell, index) => (
-                    <GameCell
-                      key={index}
-                      cell={cell}
-                      index={index}
-                      disabled={!canReveal}
-                      onReveal={() =>
-                        reveal.mutate({
-                          matchId: state.matchId,
-                          turnId: state.turnId,
-                          cellIndex: index,
-                        })
-                      }
-                    />
-                  ))}
+                  <p className="text-sm">
+                    {account
+                      ? "Account opponents are preferred for 30 seconds. After that, you may be paired with a guest."
+                      : "Guest games are temporary and have no saved history or replay."}
+                  </p>
+                  <button
+                    className="btn"
+                    onClick={() => cancel.mutate()}
+                    disabled={cancel.isPending}
+                  >
+                    Cancel matchmaking
+                  </button>
                 </div>
-                <p className="text-sm">
-                  ? Covered · ✹ Bomb · Number: neighboring bombs
-                </p>
-              </Panel>
-            )}
-          </div>
-          <aside className="space-y-5">
-            <Panel title="Players">
-              <div className="space-y-3">
-                {state.players.map((player) => (
-                  <PlayerScore
-                    key={player.id}
-                    player={player}
-                    active={player.id === state.activePlayer}
-                    own={player.id === me?.id}
-                  />
-                ))}
-                {state.players.length < 2 && (
-                  <div className="alert">
-                    {2 - state.players.length} open seat
-                    {state.players.length === 0 ? "s" : ""}
+              ) : (
+                <>
+                  <button
+                    className="btn btn-primary"
+                    disabled={busy}
+                    onClick={() => queue.mutate({ nickname })}
+                  >
+                    Find opponent
+                  </button>
+                  <label className="fieldset">
+                    <span className="fieldset-legend">Room visibility</span>
+                    <select
+                      className="select w-full"
+                      value={visibility}
+                      onChange={(e) =>
+                        setVisibility(e.target.value as "public" | "unlisted")
+                      }
+                    >
+                      <option value="public">
+                        Public — listed in the lobby
+                      </option>
+                      <option value="unlisted">
+                        Invite-only — share a link
+                      </option>
+                    </select>
+                  </label>
+                  <button
+                    className="btn btn-primary"
+                    disabled={busy}
+                    onClick={() => create.mutate({ nickname, visibility })}
+                  >
+                    Create room
+                  </button>
+                </>
+              )}
+            </>
+          )}
+          <p className="text-sm">
+            Games between two accounts save a result and replay. Any game with a
+            guest is unrecorded.
+          </p>
+          {account ? (
+            <Link href="/game/history" className="link">
+              My history, replays and privacy
+            </Link>
+          ) : (
+            <Link href="/" className="link">
+              Sign in to save account games
+            </Link>
+          )}
+        </Panel>
+        <Panel title="Public rooms">
+          {!lobby ? (
+            <p role="status">Connecting to the lobby…</p>
+          ) : !lobby.rooms.length ? (
+            <p>No public rooms yet. Create one or find an opponent.</p>
+          ) : (
+            <ul className="space-y-3">
+              {lobby.rooms.map((room) => (
+                <li
+                  key={room.roomId}
+                  className="border-base-300 rounded-box space-y-2 border p-3"
+                >
+                  <div className="flex flex-wrap justify-between gap-2">
+                    <strong>
+                      {room.players.map((p) => p.nickname).join(" vs ") ||
+                        "Open room"}
+                    </strong>
+                    <span className="badge badge-outline">{room.phase}</span>
                   </div>
-                )}
-              </div>
-            </Panel>
-            <Panel title="How to play">
-              <ol className="list-decimal space-y-2 pl-5 text-sm">
-                <li>Choose a covered cell on your turn.</li>
-                <li>
-                  Find a bomb: score 1 and keep playing within your original 10
-                  seconds.
+                  <p className="text-sm">
+                    {room.players.length}/2 seats ·{" "}
+                    {room.players.some((p) => !p.account)
+                      ? "Guest game · unrecorded"
+                      : "Account players"}
+                  </p>
+                  <Link
+                    className={`btn btn-sm ${room.phase === "lobby" && room.players.length < 2 ? "btn-primary" : ""}`}
+                    href={`/game/${room.roomId}`}
+                  >
+                    {room.phase === "lobby" && room.players.length < 2
+                      ? "Join room"
+                      : "Watch"}
+                  </Link>
                 </li>
-                <li>
-                  Find an empty cell or run out of time: the opponent gets 10
-                  seconds.
-                </li>
-                <li>Find all 11 bombs to finish. Most points wins.</li>
-              </ol>
-              <p className="text-sm">
-                A lost connection reserves your seat for 15 seconds after
-                detection. Keep this page open.
-              </p>
-            </Panel>
-          </aside>
-        </div>
-      )}
+              ))}
+            </ul>
+          )}
+        </Panel>
+      </div>
     </PageShell>
   );
 }

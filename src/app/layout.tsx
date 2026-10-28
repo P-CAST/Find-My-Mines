@@ -205,6 +205,7 @@ export default function RootLayout({
                   {[
                     { href: "/", label: "Home" },
                     { href: "/game", label: "Play" },
+                    { href: "/game/history", label: "History & replays" },
                     { href: "/operator", label: "Operator" },
                   ].map(({ href, label }) => (
                     <li key={href}>

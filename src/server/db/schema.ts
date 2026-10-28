@@ -2,13 +2,17 @@ import { relations } from "drizzle-orm";
 import {
   boolean,
   index,
+  integer,
+  jsonb,
   pgTable,
   pgTableCreator,
   text,
   timestamp,
+  uuid,
 } from "drizzle-orm/pg-core";
+import type { MatchRecord } from "../game/service";
 
-export const createTable = pgTableCreator((name) => `pg-drizzle_${name}`);
+export const createTable = pgTableCreator((name) => name);
 
 export const posts = createTable(
   "post",
@@ -103,3 +107,45 @@ export const accountRelations = relations(account, ({ one }) => ({
 export const sessionRelations = relations(session, ({ one }) => ({
   user: one(user, { fields: [session.userId], references: [user.id] }),
 }));
+
+export const gameProfiles = createTable("game_profile", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => user.id, { onDelete: "cascade" }),
+  publicId: uuid("public_id").defaultRandom().notNull().unique(),
+  historyPublic: boolean("history_public").default(false).notNull(),
+});
+
+export const gameResults = createTable(
+  "game_result",
+  {
+    matchId: uuid("match_id").primaryKey(),
+    playerOneId: text("player_one_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    playerTwoId: text("player_two_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    playerOneName: text("player_one_name").notNull(),
+    playerTwoName: text("player_two_name").notNull(),
+    playerOneScore: integer("player_one_score").notNull(),
+    playerTwoScore: integer("player_two_score").notNull(),
+    winnerSeat: integer("winner_seat").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }).notNull(),
+    reason: text("reason", { enum: ["completed", "forfeit"] }).notNull(),
+    replay: jsonb("replay").$type<MatchRecord["replay"]>().notNull(),
+  },
+  (t) => [
+    index("game_result_player_one_history_idx").on(
+      t.playerOneId,
+      t.finishedAt.desc(),
+      t.matchId.desc(),
+    ),
+    index("game_result_player_two_history_idx").on(
+      t.playerTwoId,
+      t.finishedAt.desc(),
+      t.matchId.desc(),
+    ),
+  ],
+);

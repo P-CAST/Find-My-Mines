@@ -10,12 +10,13 @@ import {
 } from "@trpc/client";
 import { createTRPCReact } from "@trpc/react-query";
 import { type inferRouterInputs, type inferRouterOutputs } from "@trpc/server";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import SuperJSON from "superjson";
 
 import { type AppRouter } from "~/server/api/root";
 import { SERVER_ORIGIN } from "~/lib/game-config";
 import { createQueryClient } from "./query-client";
+import { authClient } from "~/server/better-auth/client";
 
 let clientQueryClientSingleton: QueryClient | undefined = undefined;
 const getQueryClient = () => {
@@ -47,6 +48,19 @@ export type RouterOutputs = inferRouterOutputs<AppRouter>;
 
 export function TRPCReactProvider(props: { children: React.ReactNode }) {
   const queryClient = getQueryClient();
+  const { data: account, isPending: accountPending } = authClient.useSession();
+  const previousAccount = useRef<string | null | undefined>(undefined);
+  const accountId = account?.user.id ?? null;
+  useEffect(() => {
+    if (accountPending) return;
+    const previous = previousAccount.current;
+    previousAccount.current = accountId;
+    if (previous !== undefined && previous !== accountId) {
+      // Other tabs can change auth cookies without navigating this page.
+      // Clear participant-only history/replays before fetching as the new viewer.
+      void queryClient.resetQueries();
+    }
+  }, [accountPending, accountId, queryClient]);
 
   const [trpcClient] = useState(() =>
     api.createClient({
