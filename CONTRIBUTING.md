@@ -16,6 +16,10 @@ Use HTTP mutations for commands and SSE for updates through the same Node route.
 
 Retain one global game service under development reloads. Do not assume globals cross process boundaries. Changes to stored service fields require a user-managed restart; method reloads preserve the instance. Review the runtime/disconnect limitations in README before changing this design. If tests need fresh state, instantiate `GameService` with an injected clock, scheduler, and board generator. Never expose deterministic test boards in the live API.
 
+## Messaging
+
+Keep messaging procedures on the dedicated `/api/messages/[trpc]` Node route and game/post procedures on `/api/trpc/[trpc]`. Share cookie verification and transport settings, but keep the messaging authority, revisions, listeners, and connection state separate. Never attach messaging streams to game presence or renew game leases from messaging. Keep only the latest 100 messages in memory; do not add messages to match recordings or PostgreSQL. Preserve plain-text rendering and server-enforced posting limits. The shared message-board component has two actual page consumers; keep its single-use logic in that file.
+
 ## Verification
 
 Run `pnpm check`. Add focused behavioral tests for meaningful rule changes. `pnpm test:integration` uses the existing server and requires no rooms or queued players; it verifies actual HTTP/SSE fanout, autonomous timers, presence, reconnects, room isolation, forfeits, and operator controls. The opt-in PostgreSQL test (`GAME_TEST_DATABASE=1 pnpm exec tsx --env-file=.env --test tests/history.test.ts`) uses rolled-back temporary tables to check result/replay persistence and privacy. Never stop/restart the user's development server or run an unisolated duplicate. Do not run a production build into the running dev server's `.next` output; use a separate temporary checkout/output for build verification if needed.

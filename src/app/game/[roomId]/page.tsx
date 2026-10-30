@@ -12,6 +12,7 @@ import {
   TurnTimer,
 } from "~/app/_components/game/ui";
 import { useGameConnection } from "~/app/_components/game/use-game-connection";
+import { GlobalMessageBoard } from "~/app/_components/game/global-message-board";
 
 export default function RoomPage() {
   const { roomId } = useParams<{ roomId: string }>();
@@ -282,7 +283,7 @@ export default function RoomPage() {
               )}
             </Panel>
           </div>
-          <aside className="space-y-5">
+          <aside className="min-w-0 space-y-5">
             <Panel title="Players">
               {state.players.map((player) => (
                 <PlayerScore
@@ -296,23 +297,21 @@ export default function RoomPage() {
                 <p>{2 - state.players.length} open seat</p>
               )}
             </Panel>
-            <Panel title="How to play">
-              <ol className="list-decimal space-y-2 pl-5 text-sm">
-                <li>Choose a covered cell on your turn.</li>
-                <li>
-                  A bomb scores one point and keeps the original deadline.
-                </li>
-                <li>An empty cell or timeout passes play.</li>
-                <li>Find all 11 bombs. Most points wins.</li>
-              </ol>
-              <p className="text-sm">
-                Leaving active play forfeits the match. After a connection is
-                lost, your seat is reserved for 15 seconds. Keep this room open.
-              </p>
-            </Panel>
+            <GlobalMessageBoard />
           </aside>
         </div>
       )}
+      <section className="mt-6 text-sm" aria-label="How to play">
+        <p>
+          <strong>How to play:</strong> Choose a covered cell on your turn. A
+          bomb scores one point and keeps the original deadline. An empty cell
+          or timeout passes play. Find all 11 bombs; most points wins.
+        </p>
+        <p className="mt-1">
+          Leaving active play forfeits the match. After a connection is lost,
+          your seat is reserved for 15 seconds. Keep this room open.
+        </p>
+      </section>
       <dialog ref={modal} className="modal" aria-labelledby="leave-title">
         <div className="modal-box">
           <h2 id="leave-title" className="text-lg font-bold">

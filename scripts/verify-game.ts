@@ -14,6 +14,7 @@ import type {
   GameSnapshot,
   LobbySnapshot,
 } from "../src/server/game/service";
+import type { BoardSnapshot } from "../src/server/messages/service";
 import { SERVER_ORIGIN } from "../src/lib/game-config";
 
 const origin = process.env.GAME_TEST_ORIGIN ?? SERVER_ORIGIN;
@@ -50,10 +51,14 @@ function client() {
   const api = createTRPCClient<AppRouter>({
     links: [
       splitLink({
-        condition: (op) =>
-          ["game.session", "game.login", "game.logout"].includes(op.path),
-        true: httpLink(options),
-        false: httpBatchStreamLink(options),
+        condition: (op) => op.path.startsWith("messages."),
+        true: httpLink({ ...options, url: `${origin}/api/messages` }),
+        false: splitLink({
+          condition: (op) =>
+            ["game.session", "game.login", "game.logout"].includes(op.path),
+          true: httpLink(options),
+          false: httpBatchStreamLink(options),
+        }),
       }),
     ],
   });
@@ -66,7 +71,7 @@ async function stream<T>(
 ) {
   const abort = new AbortController();
   const response = await owner.transport(
-    `${origin}/api/trpc/${path}${input === undefined ? "" : `?input=${encodeURIComponent(JSON.stringify(superjson.serialize(input)))}`}`,
+    `${origin}/api/${path.startsWith("messages.") ? "messages" : "trpc"}/${path}${input === undefined ? "" : `?input=${encodeURIComponent(JSON.stringify(superjson.serialize(input)))}`}`,
     {
       signal: abort.signal,
     },
@@ -170,6 +175,85 @@ try {
     "Integration verification requires an empty queue.",
   );
   const baseline = initial.count;
+  // Message streams do not establish game presence and use a separate route.
+  const aBoard = await stream<BoardSnapshot>(a, "messages.onBoard");
+  const bBoard = await stream<BoardSnapshot>(b, "messages.onBoard");
+  closers.push(aBoard.close, bBoard.close);
+  await until(() => aBoard.latest() && bBoard.latest(), "message snapshots");
+  const beforeChat = dashboard.latest()!;
+  const sent = await a.api.messages.send.mutate({
+    text: "Integration global message",
+  });
+  await assert.rejects(
+    a.api.messages.send.mutate({ text: "Too soon" }),
+    /two seconds/,
+  );
+  await until(
+    () => aBoard.latest()?.messages.some((message) => message.id === sent.id),
+    "sender message fanout",
+  );
+  await until(
+    () => bBoard.latest()?.messages.some((message) => message.id === sent.id),
+    "global message fanout",
+  );
+  assert.equal(
+    aBoard.latest()!.messages.find((message) => message.id === sent.id)!.own,
+    true,
+  );
+  assert.equal(
+    bBoard.latest()!.messages.find((message) => message.id === sent.id)!.own,
+    false,
+  );
+  const anonymous = aBoard
+    .latest()!
+    .messages.find((message) => message.id === sent.id)!.nickname;
+  assert.match(anonymous, /^Anonymous [1-9]\d{5}$/);
+  assert.equal(
+    bBoard.latest()!.messages.find((message) => message.id === sent.id)!
+      .nickname,
+    anonymous,
+  );
+  const spoofed = await a.transport(`${origin}/api/messages/messages.send`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(
+      superjson.serialize({ text: "Forged author", nickname: "Impersonator" }),
+    ),
+  });
+  assert.equal(spoofed.status, 400);
+  assert.equal(dashboard.latest()!.count, baseline);
+  assert.equal(dashboard.latest()!.revision, beforeChat.revision);
+  const wrongGameRoute = await a.transport(
+    `${origin}/api/messages/game.session`,
+  );
+  const wrongMessageRoute = await a.transport(
+    `${origin}/api/trpc/messages.onBoard`,
+  );
+  assert.equal(wrongGameRoute.status, 404);
+  assert.equal(wrongMessageRoute.status, 404);
+  const crossOrigin = await a.transport(
+    `${origin}/api/messages/messages.onBoard`,
+    {
+      headers: { origin: "https://different-origin.invalid" },
+    },
+  );
+  assert.equal(crossOrigin.status, 403);
+  await aBoard.close();
+  const reconnectedBoard = await stream<BoardSnapshot>(a, "messages.onBoard");
+  closers.push(reconnectedBoard.close);
+  await until(
+    () =>
+      reconnectedBoard
+        .latest()
+        ?.messages.some((message) => message.id === sent.id),
+    "message history on reconnect",
+  );
+  assert.equal(
+    reconnectedBoard
+      .latest()!
+      .messages.find((message) => message.id === sent.id)!.nickname,
+    anonymous,
+  );
   for (const player of players) {
     const lobby = await stream<LobbySnapshot>(player, "game.onLobby");
     closers.push(lobby.close);
@@ -195,6 +279,13 @@ try {
     visibility: "unlisted",
   });
   owned.push({ owner: c, roomId: second.roomId });
+  const roomBoard = await stream<BoardSnapshot>(c, "messages.onBoard");
+  closers.push(roomBoard.close);
+  await until(
+    () =>
+      roomBoard.latest()?.messages.some((message) => message.id === sent.id),
+    "global history from invite-only room",
+  );
   const aState = await stream<GameSnapshot>(a, "game.onState", first);
   closers.push(aState.close);
   let bState = await stream<GameSnapshot>(b, "game.onState", first);
@@ -265,7 +356,7 @@ try {
   await until(
     () =>
       aState.latest()?.players.find((p) => p.id === bid)?.connected === false,
-    "room close despite lobby stream",
+    "room close despite lobby and messaging streams",
   );
   bState = await stream<GameSnapshot>(b, "game.onState", first);
   closers.push(bState.close);
@@ -289,7 +380,7 @@ try {
   await until(
     () =>
       aState.latest()?.players.find((p) => p.id === bid)?.connected === false,
-    "lease expiry",
+    "lease expiry despite active messaging SSE",
     18000,
   );
   await until(
@@ -302,7 +393,7 @@ try {
   await op.api.game.logout.mutate();
   await assert.rejects(op.api.game.reset.mutate(first), /Operator login/);
   console.log(
-    "PASS: two isolated rooms, HTTP/SSE fanout, server timers, duplicate tabs, reconnect, operator controls, and unrecorded guest forfeit.",
+    "PASS: isolated messaging HTTP/SSE, global fanout/history, posting limits, two isolated rooms, server timers, duplicate tabs, reconnect, operator controls, and guest forfeit despite messaging connections.",
   );
 } finally {
   beats.forEach(clearInterval);

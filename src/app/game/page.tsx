@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "~/trpc/react";
 import { ConnectionStatus, PageShell, Panel } from "~/app/_components/game/ui";
 import { useGameConnection } from "~/app/_components/game/use-game-connection";
+import { GlobalMessageBoard } from "~/app/_components/game/global-message-board";
 
 export default function GameLobby() {
   const {
@@ -66,7 +67,7 @@ export default function GameLobby() {
           </button>
         </div>
       )}
-      <div className="grid gap-5 md:grid-cols-2">
+      <div className="grid items-stretch gap-5 md:grid-cols-2">
         <Panel title="Play a game">
           <p>Find an opponent or create a room to challenge a friend.</p>
           {lobby?.roomId ? (
@@ -159,44 +160,47 @@ export default function GameLobby() {
             </Link>
           )}
         </Panel>
-        <Panel title="Public rooms">
-          {!lobby ? (
-            <p role="status">Connecting to the lobby…</p>
-          ) : !lobby.rooms.length ? (
-            <p>No public rooms yet. Create one or find an opponent.</p>
-          ) : (
-            <ul className="space-y-3">
-              {lobby.rooms.map((room) => (
-                <li
-                  key={room.roomId}
-                  className="border-base-300 rounded-box space-y-2 border p-3"
-                >
-                  <div className="flex flex-wrap justify-between gap-2">
-                    <strong>
-                      {room.players.map((p) => p.nickname).join(" vs ") ||
-                        "Open room"}
-                    </strong>
-                    <span className="badge badge-outline">{room.phase}</span>
-                  </div>
-                  <p className="text-sm">
-                    {room.players.length}/2 seats ·{" "}
-                    {room.players.some((p) => !p.account)
-                      ? "Guest game · unrecorded"
-                      : "Account players"}
-                  </p>
-                  <Link
-                    className={`btn btn-sm ${room.phase === "lobby" && room.players.length < 2 ? "btn-primary" : ""}`}
-                    href={`/game/${room.roomId}`}
+        <GlobalMessageBoard />
+        <div className="min-w-0 md:col-span-2">
+          <Panel title="Public rooms">
+            {!lobby ? (
+              <p role="status">Connecting to the lobby…</p>
+            ) : !lobby.rooms.length ? (
+              <p>No public rooms yet. Create one or find an opponent.</p>
+            ) : (
+              <ul className="space-y-3">
+                {lobby.rooms.map((room) => (
+                  <li
+                    key={room.roomId}
+                    className="border-base-300 rounded-box space-y-2 border p-3"
                   >
-                    {room.phase === "lobby" && room.players.length < 2
-                      ? "Join room"
-                      : "Watch"}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Panel>
+                    <div className="flex flex-wrap justify-between gap-2">
+                      <strong>
+                        {room.players.map((p) => p.nickname).join(" vs ") ||
+                          "Open room"}
+                      </strong>
+                      <span className="badge badge-outline">{room.phase}</span>
+                    </div>
+                    <p className="text-sm">
+                      {room.players.length}/2 seats ·{" "}
+                      {room.players.some((p) => !p.account)
+                        ? "Guest game · unrecorded"
+                        : "Account players"}
+                    </p>
+                    <Link
+                      className={`btn btn-sm ${room.phase === "lobby" && room.players.length < 2 ? "btn-primary" : ""}`}
+                      href={`/game/${room.roomId}`}
+                    >
+                      {room.phase === "lobby" && room.players.length < 2
+                        ? "Join room"
+                        : "Watch"}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Panel>
+        </div>
       </div>
     </PageShell>
   );

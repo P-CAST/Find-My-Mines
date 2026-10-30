@@ -73,27 +73,44 @@ export function TRPCReactProvider(props: { children: React.ReactNode }) {
             process.env.NODE_ENV === "development",
         }),
         splitLink({
-          condition: (op) => op.type === "subscription",
-          true: httpSubscriptionLink({
-            transformer: SuperJSON,
-            url: SERVER_ORIGIN + "/api/trpc",
-            eventSourceOptions: { withCredentials: true },
-          }),
-          false: splitLink({
-            condition: (op) =>
-              ["game.session", "game.login", "game.logout"].includes(op.path),
-            true: httpLink({
+          condition: (op) => op.path.startsWith("messages."),
+          true: splitLink({
+            condition: (op) => op.type === "subscription",
+            true: httpSubscriptionLink({
               transformer: SuperJSON,
-              url: SERVER_ORIGIN + "/api/trpc",
+              url: SERVER_ORIGIN + "/api/messages",
+              eventSourceOptions: { withCredentials: true },
+            }),
+            false: httpLink({
+              transformer: SuperJSON,
+              url: SERVER_ORIGIN + "/api/messages",
               fetch: (url, options) =>
                 fetch(url, { ...options, credentials: "include" }),
             }),
-            false: httpBatchStreamLink({
+          }),
+          false: splitLink({
+            condition: (op) => op.type === "subscription",
+            true: httpSubscriptionLink({
               transformer: SuperJSON,
               url: SERVER_ORIGIN + "/api/trpc",
-              fetch: (url, options) =>
-                fetch(url, { ...options, credentials: "include" }),
-              headers: () => ({ "x-trpc-source": "nextjs-react" }),
+              eventSourceOptions: { withCredentials: true },
+            }),
+            false: splitLink({
+              condition: (op) =>
+                ["game.session", "game.login", "game.logout"].includes(op.path),
+              true: httpLink({
+                transformer: SuperJSON,
+                url: SERVER_ORIGIN + "/api/trpc",
+                fetch: (url, options) =>
+                  fetch(url, { ...options, credentials: "include" }),
+              }),
+              false: httpBatchStreamLink({
+                transformer: SuperJSON,
+                url: SERVER_ORIGIN + "/api/trpc",
+                fetch: (url, options) =>
+                  fetch(url, { ...options, credentials: "include" }),
+                headers: () => ({ "x-trpc-source": "nextjs-react" }),
+              }),
             }),
           }),
         }),

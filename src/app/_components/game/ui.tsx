@@ -18,14 +18,18 @@ export function PageShell({ children }: { children: ReactNode }) {
 export function Panel({
   title,
   children,
+  bodyClassName = "gap-4",
+  titleClassName = "",
 }: {
   title: string;
   children: ReactNode;
+  bodyClassName?: string;
+  titleClassName?: string;
 }) {
   return (
     <section className="card border-base-300 bg-base-100 border shadow-sm">
-      <div className="card-body gap-4">
-        <h2 className="card-title">{title}</h2>
+      <div className={`card-body ${bodyClassName}`}>
+        <h2 className={`card-title ${titleClassName}`}>{title}</h2>
         {children}
       </div>
     </section>
