@@ -12,6 +12,8 @@ export const env = createEnv({
         ? z.string()
         : z.string().optional(),
     GAME_OPERATOR_PASSWORD: z.string().min(16).optional(),
+    OPENAI_API_KEY: z.string().trim().min(1).optional(),
+    OPENAI_ANALYSIS_MODEL: z.string().trim().min(1).optional(),
     DATABASE_URL: z.string().url(),
     NODE_ENV: z
       .enum(["development", "test", "production"])
@@ -52,6 +54,8 @@ export const env = createEnv({
   runtimeEnv: {
     BETTER_AUTH_SECRET: process.env.BETTER_AUTH_SECRET,
     GAME_OPERATOR_PASSWORD: process.env.GAME_OPERATOR_PASSWORD,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    OPENAI_ANALYSIS_MODEL: process.env.OPENAI_ANALYSIS_MODEL,
     DATABASE_URL: process.env.DATABASE_URL,
     NODE_ENV: process.env.NODE_ENV,
     NEXT_PUBLIC_PRODUCTION_DOMAIN: process.env.NEXT_PUBLIC_PRODUCTION_DOMAIN,

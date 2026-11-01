@@ -1,7 +1,8 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, lt, or, sql } from "drizzle-orm";
 import { db } from "~/server/db";
-import { gameProfiles, gameResults } from "~/server/db/schema";
+import { gameAnalyses, gameProfiles, gameResults } from "~/server/db/schema";
+import type { SavedAnalysis } from "./analysis";
 import type { MatchRecord } from "./service";
 
 export type HistoryCursor = { finishedAt: Date; matchId: string };
@@ -137,7 +138,90 @@ export function createHistoryStore(database: HistoryDatabase) {
     return result;
   }
 
-  return { saveResult, profile, setVisibility, history, replay };
+  async function analysisSource(
+    viewerId: string | null,
+    matchId: string,
+    participantOnly = false,
+  ) {
+    const [result] = await database
+      .select({
+        replay: gameResults.replay,
+        winnerSeat: gameResults.winnerSeat,
+        reason: gameResults.reason,
+        isParticipant: viewerId
+          ? sql<boolean>`(${participant(viewerId)})`
+          : sql<boolean>`false`,
+      })
+      .from(gameResults)
+      .where(
+        and(
+          eq(gameResults.matchId, matchId),
+          participantOnly
+            ? viewerId
+              ? participant(viewerId)
+              : sql`false`
+            : access(viewerId),
+        ),
+      );
+    if (!result)
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "This replay is private or unavailable.",
+      });
+    return result;
+  }
+  async function readAnalysis(
+    viewerId: string | null,
+    matchId: string,
+    version: number,
+  ) {
+    // Join current match permissions on every read, including cached reports.
+    const [result] = await database
+      .select({ analysis: gameAnalyses })
+      .from(gameAnalyses)
+      .innerJoin(gameResults, eq(gameResults.matchId, gameAnalyses.matchId))
+      .where(
+        and(
+          eq(gameAnalyses.matchId, matchId),
+          eq(gameAnalyses.version, version),
+          access(viewerId),
+        ),
+      );
+    return result?.analysis ?? null;
+  }
+  async function saveAnalysis(analysis: SavedAnalysis) {
+    await database.insert(gameAnalyses).values(analysis).onConflictDoNothing();
+    const [saved] = await database
+      .select()
+      .from(gameAnalyses)
+      .where(
+        and(
+          eq(gameAnalyses.matchId, analysis.matchId),
+          eq(gameAnalyses.version, analysis.version),
+        ),
+      );
+    if (!saved) throw new Error("Analysis was not saved");
+    return saved;
+  }
+
+  return {
+    saveResult,
+    profile,
+    setVisibility,
+    history,
+    replay,
+    analysisSource,
+    readAnalysis,
+    saveAnalysis,
+  };
 }
-export const { saveResult, profile, setVisibility, history, replay } =
-  createHistoryStore(db);
+export const {
+  saveResult,
+  profile,
+  setVisibility,
+  history,
+  replay,
+  analysisSource,
+  readAnalysis,
+  saveAnalysis,
+} = createHistoryStore(db);

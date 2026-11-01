@@ -38,6 +38,25 @@ Account seats belong to the verified Better Auth account across browsers and dev
 - History is private by default. Change **Allow public history and replays** in My history to share your profile link. Participants can always view their own saved matches. Other visitors can view a result or replay only while **both players** allow public history. Privacy is checked by the server for listings and direct replay URLs. Visibility changes affect subsequent requests; they cannot retract data someone already viewed.
 - Saving runs outside synchronous game transitions. Results and replays are written atomically and retried every five seconds on failure, using match IDs to prevent duplicates. Players see pending/failed save status; the operator sees pending/failed totals. Pending writes survive room disposal but remain in memory until saved: a process crash or restart can lose unsaved records. Successfully saved records and preferences survive restarts.
 
+### AI replay analysis
+
+A saved replay has an AI game analysis panel. A signed-in match participant can generate a report; everyone allowed to view that replay can read the saved report. Public access still requires both participants to allow public history. Revoking public history also revokes access to its analysis. Reports are shared between the participants and saved once per match and analysis version, without a regeneration button.
+
+To enable generation, apply the additive migration with `pnpm db:migrate`, then set both server-only values in `.env`:
+
+```dotenv
+OPENAI_API_KEY="your-api-key"
+OPENAI_ANALYSIS_MODEL="your-responses-compatible-model"
+```
+
+Choose a model available to your OpenAI project that supports Responses API structured outputs. Restart the server yourself when changing environment configuration. Missing values disable generation without preventing access to saved reports. Deployment order is migration first, application update second, then enable configuration. No replay backfill is required.
+
+Generation sends anonymized public replay events to OpenAI with `store: false`; it excludes player names, account/session identifiers, chat, and hidden bomb layouts. This setting disables Responses storage, not all provider retention policies. Reports contain server-calculated statistics, an AI summary, event links, and coaching for both players. Coaching does not establish optimal play or exact probabilities and can be inaccurate. Selecting an event pauses playback and seeks to that moment.
+
+Requests use the existing HTTP route, separate from live-game transitions. Limits are two concurrent requests across the process and five new attempts per account per hour, including failed attempts; cached reads and deduplicated requests do not consume additional attempts. Requests time out after 60 seconds, output is capped at 8,000 tokens, and evidence exceeding 64 KiB is rejected without truncation. Failures can be retried manually. In-memory concurrency and rate limits survive development reloads but reset on process restart; completed reports persist in PostgreSQL. Logs contain duration, token usage, cache hits, and sanitized error categories, never provider payloads or keys.
+
+`pnpm check` tests provider behavior using mocks and incurs no OpenAI charges. The opt-in PostgreSQL history test also checks report persistence, uniqueness, permissions, and cascading deletion using rolled-back temporary tables. A real provider smoke test requires the two settings above and one explicit Analyze game action on a participant's replay.
+
 ## Global message board
 
 The lobby and every room share one global message board. Guests, signed-in accounts, and spectators can read and post. The server labels account messages with the signed-in account name and guests as `Anonymous 123456`, using a stable six-digit label for that signed browser session. Game nicknames do not control message authors. Messages are visible across all rooms, including invite-only rooms; room IDs and invite links are never added automatically. The lobby places the board beside Play a game, with Public rooms below both. In rooms, it sits below Players; the rules are a small footnote beneath the game.

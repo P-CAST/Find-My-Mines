@@ -1,5 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { env } from "~/env";
+import { createAnalysisService } from "~/server/game/analysis";
 import {
   createTRPCRouter,
   protectedProcedure,
@@ -13,8 +15,16 @@ import {
   profile,
   replay,
   saveResult,
+  analysisSource,
+  readAnalysis,
+  saveAnalysis,
   setVisibility,
 } from "~/server/game/history";
+
+const analysisService = createAnalysisService(
+  { analysisSource, readAnalysis, saveAnalysis },
+  { apiKey: env.OPENAI_API_KEY, model: env.OPENAI_ANALYSIS_MODEL },
+);
 
 const gameProcedure = publicProcedure.use(({ ctx, next }) => {
   const game = getGame();
@@ -42,6 +52,16 @@ const nickname = z
   .max(24)
   .refine((value) => !/[\p{C}]/u.test(value), "Use visible characters.");
 export const gameRouter = createTRPCRouter({
+  analysis: publicProcedure
+    .input(z.object({ matchId: z.string().uuid() }))
+    .query(({ ctx, input }) =>
+      analysisService.read(ctx.session?.user.id ?? null, input.matchId),
+    ),
+  generateAnalysis: protectedProcedure
+    .input(z.object({ matchId: z.string().uuid() }))
+    .mutation(({ ctx, input }) =>
+      analysisService.generate(ctx.session.user.id, input.matchId),
+    ),
   session: gameProcedure.query(({ ctx }) => ({
     id: ctx.gameSession.id,
     operator: ctx.gameSession.operator,

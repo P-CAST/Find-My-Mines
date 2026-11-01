@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
+import type { SavedAnalysis } from "../src/server/game/analysis";
 import type { MatchRecord } from "../src/server/game/service";
 
 // Opt-in PostgreSQL verification uses transaction-local temporary tables only.
@@ -15,16 +16,21 @@ void test(
     const rollback = new Error("Rollback temporary test tables");
     try {
       await db.transaction(async (tx) => {
-        const migration = (
-          await readFile(
-            new URL("../drizzle/0000_even_mariko_yashida.sql", import.meta.url),
-            "utf8",
+        for (const filename of [
+          "0000_even_mariko_yashida.sql",
+          "0001_premium_enchantress.sql",
+        ]) {
+          const migration = (
+            await readFile(
+              new URL(`../drizzle/${filename}`, import.meta.url),
+              "utf8",
+            )
           )
-        )
-          .replaceAll("CREATE TABLE ", "CREATE TEMPORARY TABLE ")
-          .replaceAll('REFERENCES "public"."user"', 'REFERENCES "user"');
-        for (const statement of migration.split("--> statement-breakpoint"))
-          if (statement.trim()) await tx.execute(sql.raw(statement));
+            .replaceAll("CREATE TABLE ", "CREATE TEMPORARY TABLE ")
+            .replaceAll('REFERENCES "public".', "REFERENCES ");
+          for (const statement of migration.split("--> statement-breakpoint"))
+            if (statement.trim()) await tx.execute(sql.raw(statement));
+        }
         await tx.execute(
           sql`insert into "user" (id, name, email, email_verified, created_at, updated_at)
               select id, id, id || '@example.test', false, now(), now()
@@ -71,6 +77,49 @@ void test(
           store.history(null, { publicId: a.publicId }),
           /private/,
         );
+        const analysis: SavedAnalysis = {
+          matchId: record.matchId,
+          version: 1,
+          model: "test-model",
+          generatedAt: new Date(),
+          inputTokens: 10,
+          outputTokens: 20,
+          document: {
+            report: {
+              summary: "Test summary",
+              keyMoments: [],
+              coaching: [
+                { seat: 0, tips: [] },
+                { seat: 1, tips: [] },
+              ],
+            },
+            statistics: {
+              players: [],
+              turnChanges: 0,
+              durationMs: 1000,
+              winnerSeat: 0,
+              reason: "completed",
+            },
+          },
+        };
+        await store.saveAnalysis(analysis);
+        await store.saveAnalysis({ ...analysis, model: "must-not-overwrite" });
+        assert.equal(
+          (await store.readAnalysis("a", record.matchId, 1))?.model,
+          "test-model",
+        );
+        assert.equal(
+          (await store.readAnalysis("b", record.matchId, 1))?.model,
+          "test-model",
+        );
+        assert.equal(await store.readAnalysis(null, record.matchId, 1), null);
+        assert.equal(
+          (await store.analysisSource("a", record.matchId, true)).isParticipant,
+          true,
+        );
+        await assert.rejects(
+          store.analysisSource("outsider", record.matchId, true),
+        );
         await store.setVisibility("a", true);
         assert.equal(
           (await store.history(null, { publicId: a.publicId })).items.length,
@@ -90,7 +139,17 @@ void test(
           "playerOneId" in (await store.replay(null, record.matchId)),
           false,
         );
+        assert.ok(await store.readAnalysis(null, record.matchId, 1));
+        assert.equal(
+          (await store.analysisSource(null, record.matchId)).isParticipant,
+          false,
+        );
+        await assert.rejects(
+          store.analysisSource("outsider", record.matchId, true),
+        );
         await store.setVisibility("b", false);
+        assert.equal(await store.readAnalysis(null, record.matchId, 1), null);
+        assert.ok(await store.readAnalysis("a", record.matchId, 1));
         await assert.rejects(store.replay(null, record.matchId), /private/);
         assert.equal(
           (await store.history(null, { publicId: a.publicId })).items.length,
@@ -110,6 +169,13 @@ void test(
           24,
         );
         assert.equal(JSON.stringify(first).includes("playerOneId"), false);
+        await tx.execute(
+          sql`delete from "game_result" where match_id = ${record.matchId}`,
+        );
+        const orphaned = await tx.execute(
+          sql`select count(*)::int as count from "game_analysis" where match_id = ${record.matchId}`,
+        );
+        assert.equal(orphaned[0]?.count, 0);
         throw rollback;
       });
     } catch (error) {

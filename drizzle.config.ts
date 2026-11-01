@@ -16,5 +16,6 @@ export default {
     "post",
     "game_profile",
     "game_result",
+    "game_analysis",
   ],
 } satisfies Config;

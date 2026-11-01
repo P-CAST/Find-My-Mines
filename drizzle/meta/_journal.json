@@ -8,6 +8,13 @@
       "when": 1793127193163,
       "tag": "0000_even_mariko_yashida",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1793376311180,
+      "tag": "0001_premium_enchantress",
+      "breakpoints": true
     }
   ]
 }

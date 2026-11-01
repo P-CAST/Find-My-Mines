@@ -25,6 +25,7 @@ export function HistoryView({ publicId }: { publicId?: string }) {
       utils.game.profile.setData(undefined, data);
       void utils.game.history.invalidate();
       void utils.game.replay.invalidate();
+      void utils.game.analysis.invalidate();
     },
   });
   return (

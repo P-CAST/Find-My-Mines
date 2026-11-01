@@ -6,11 +6,13 @@ import {
   jsonb,
   pgTable,
   pgTableCreator,
+  primaryKey,
   text,
   timestamp,
   uuid,
 } from "drizzle-orm/pg-core";
 import type { MatchRecord } from "../game/service";
+import type { AnalysisDocument } from "../game/analysis";
 
 export const createTable = pgTableCreator((name) => name);
 
@@ -148,4 +150,22 @@ export const gameResults = createTable(
       t.matchId.desc(),
     ),
   ],
+);
+
+export const gameAnalyses = createTable(
+  "game_analysis",
+  {
+    matchId: uuid("match_id")
+      .notNull()
+      .references(() => gameResults.matchId, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    model: text("model").notNull(),
+    document: jsonb("document").$type<AnalysisDocument>().notNull(),
+    generatedAt: timestamp("generated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    inputTokens: integer("input_tokens").notNull(),
+    outputTokens: integer("output_tokens").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.matchId, t.version] })],
 );
