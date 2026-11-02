@@ -4,6 +4,7 @@ import { GameService, type Actor } from "../src/server/game/service";
 import {
   adjacentBombs,
   generateBoard,
+  isValidBoard,
   GRACE_MS,
   LEASE_MS,
   TURN_MS,
@@ -14,7 +15,7 @@ const actor = (sessionId: string, userId: string | null = null): Actor => ({
   userId,
 });
 
-function fixture() {
+function fixture(shouldFailGeneration = () => false) {
   let now = 1_000;
   let timerId = 0;
   const jobs = new Map<number, { at: number; fn: () => void }>();
@@ -25,6 +26,7 @@ function fixture() {
     firstPlayer: () => 0,
     log: () => undefined,
     board: () => {
+      if (shouldFailGeneration()) throw new Error("Generation failed");
       boards++;
       return new Set(
         Array.from({ length: 11 }, (_, i) => i + (boards > 1 ? 11 : 0)),
@@ -83,11 +85,95 @@ void test("generation has exactly eleven distinct, in-bounds bombs", () => {
   for (let i = 0; i < 100; i++) {
     const board = generateBoard();
     assert.equal(board.size, 11);
+    assert.ok(isValidBoard(board));
     assert.ok([...board].every((n) => Number.isInteger(n) && n >= 0 && n < 36));
     boards.add([...board].sort().join(","));
   }
   assert.ok(boards.size > 1);
 });
+const validBoard = [2, 4, 6, 9, 11, 12, 20, 21, 28, 29, 30];
+const squareBoard = [4, 8, 10, 11, 20, 21, 23, 26, 27, 30, 32];
+const connectedBoard = [2, 6, 7, 13, 14, 17, 20, 22, 25, 31, 33];
+const unbalancedBoard = [9, 14, 18, 20, 22, 23, 24, 30, 31, 34, 35];
+
+void test("board constraints reject squares, large groups, and unbalanced halves", () => {
+  // Rotate to exercise all four halves and edge/corner handling.
+  const rotate = (cells: number[]) =>
+    cells.map((cell) => (cell % 6) * 6 + 5 - Math.floor(cell / 6));
+  for (const [initial, valid] of [
+    [validBoard, true],
+    [squareBoard, false],
+    [connectedBoard, false],
+    [unbalancedBoard, false],
+  ] as const) {
+    let cells = [...initial];
+    for (let i = 0; i < 4; i++) {
+      assert.equal(isValidBoard(new Set(cells)), valid);
+      cells = rotate(cells);
+    }
+  }
+});
+
+// Drive the real sampler with a chosen candidate on each attempt.
+function candidateSampler(candidate: (attempt: number) => number[]) {
+  let calls = 0;
+  let cells: number[] = [];
+  return {
+    randomIndex: (length: number) => {
+      const i = calls % 11;
+      if (i === 0) cells = Array.from({ length: 36 }, (_, cell) => cell);
+      assert.equal(length, 36 - i);
+      const j = cells.indexOf(candidate(Math.floor(calls / 11))[i]!);
+      assert.ok(j >= i);
+      [cells[i], cells[j]] = [cells[j]!, cells[i]!];
+      calls++;
+      return j - i;
+    },
+    calls: () => calls,
+  };
+}
+
+void test("generation retries rejected candidates and accepts attempt 1000", () => {
+  const sampler = candidateSampler((attempt) =>
+    attempt === 999
+      ? validBoard
+      : [squareBoard, connectedBoard, unbalancedBoard][attempt % 3]!,
+  );
+  assert.deepEqual(generateBoard(sampler.randomIndex), new Set(validBoard));
+  assert.equal(sampler.calls(), 1000 * 11);
+});
+
+void test("generation reports exhaustion without returning an invalid fallback", () => {
+  const sampler = candidateSampler(() => squareBoard);
+  assert.throws(
+    () => generateBoard(sampler.randomIndex),
+    /generation failed after 1000 attempts/i,
+  );
+  assert.equal(sampler.calls(), 1000 * 11);
+});
+
+void test("generation returns immediately when the first candidate is valid", () => {
+  const sampler = candidateSampler(() => validBoard);
+  assert.deepEqual(generateBoard(sampler.randomIndex), new Set(validBoard));
+  assert.equal(sampler.calls(), 11);
+});
+
+void test("a failed start preserves the room and can be retried", () => {
+  let fail = false;
+  const f = fixture(() => fail);
+  try {
+    f.game.reset(f.roomId);
+    const before = f.game.snapshot(f.roomId);
+    fail = true;
+    assert.throws(() => f.game.start(f.roomId), /Board generation failed/);
+    assert.deepEqual(f.game.snapshot(f.roomId), before);
+    fail = false;
+    assert.equal(f.game.start(f.roomId).phase, "active");
+  } finally {
+    f.game.dispose();
+  }
+});
+
 void test("neighbor counts respect corners, edges, diagonals and row boundaries", () => {
   const bombs = new Set([1, 6, 7, 4, 10, 11, 28, 29, 34]);
   assert.equal(adjacentBombs(bombs, 0), 3);

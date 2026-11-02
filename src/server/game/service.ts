@@ -826,13 +826,23 @@ export class GameService {
       this.begin(r, r.winner!);
   }
   private begin(r: Room, first?: string) {
+    // Generate before changing any match state; failure must not start a game.
+    let bombs: Set<number>;
+    try {
+      bombs = this.board();
+    } catch {
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: "Board generation failed. Please try again.",
+      });
+    }
     this.cancelBot(r);
     r.botAttempts.clear();
     r.botCalls = 0;
     r.matchId = randomUUID();
     r.phase = "active";
     r.cells = covered();
-    r.bombs = this.board();
+    r.bombs = bombs;
     r.players.forEach((p) => {
       p.score = 0;
     });
