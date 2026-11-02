@@ -13,6 +13,7 @@ export const env = createEnv({
         : z.string().optional(),
     GAME_OPERATOR_PASSWORD: z.string().min(16).optional(),
     OPENAI_API_KEY: z.string().trim().min(1).optional(),
+    OPENAI_BOT_MODEL: z.string().trim().min(1).optional(),
     OPENAI_ANALYSIS_MODEL: z.string().trim().min(1).optional(),
     DATABASE_URL: z.string().url(),
     NODE_ENV: z
@@ -55,6 +56,7 @@ export const env = createEnv({
     BETTER_AUTH_SECRET: process.env.BETTER_AUTH_SECRET,
     GAME_OPERATOR_PASSWORD: process.env.GAME_OPERATOR_PASSWORD,
     OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    OPENAI_BOT_MODEL: process.env.OPENAI_BOT_MODEL,
     OPENAI_ANALYSIS_MODEL: process.env.OPENAI_ANALYSIS_MODEL,
     DATABASE_URL: process.env.DATABASE_URL,
     NODE_ENV: process.env.NODE_ENV,

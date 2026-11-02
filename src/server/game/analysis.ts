@@ -1,5 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { requestResponse } from "./openai";
 import type { MatchRecord } from "./service";
 
 export const ANALYSIS_VERSION = 1;
@@ -219,14 +220,9 @@ export async function requestReport(
 ) {
   const signal = AbortSignal.timeout(timeoutMs);
   try {
-    const response = await transport("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      signal,
-      body: JSON.stringify({
+    const response = await requestResponse(
+      config.apiKey,
+      {
         model: config.model,
         store: false,
         max_output_tokens: 8000,
@@ -240,8 +236,10 @@ export async function requestReport(
             schema: outputSchema,
           },
         },
-      }),
-    });
+      },
+      signal,
+      transport,
+    );
     if (!response.ok)
       throw new TRPCError({
         code: response.status === 429 ? "TOO_MANY_REQUESTS" : "BAD_GATEWAY",

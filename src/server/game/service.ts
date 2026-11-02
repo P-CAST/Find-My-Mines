@@ -1,5 +1,6 @@
 import { randomInt, randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
+import type { BotProvider } from "./bot";
 import {
   adjacentBombs,
   BOMB_COUNT,
@@ -25,6 +26,7 @@ export type GameSnapshot = {
   instanceId: string;
   roomId: string;
   visibility: Visibility;
+  mode: "human" | "bot";
   revision: number;
   serverNow: number;
   viewerId: string | null;
@@ -36,6 +38,7 @@ export type GameSnapshot = {
     nickname: string;
     score: number;
     account: boolean;
+    bot?: true;
     seated: boolean;
     connected: boolean;
     reservedUntil: number | null;
@@ -67,6 +70,11 @@ export type LobbySnapshot = {
   roomId: string | null;
   queuedAt: number | null;
   account: boolean;
+  bot: {
+    available: boolean;
+    remaining: number;
+    nextAvailableAt: number | null;
+  };
 };
 export type ClientsSnapshot = {
   instanceId: string;
@@ -110,6 +118,7 @@ export type MatchRecord = {
 };
 type Timer = ReturnType<typeof setTimeout>;
 type Player = {
+  bot?: true;
   id: string;
   key: string;
   userId: string | null;
@@ -118,7 +127,16 @@ type Player = {
   seated: boolean;
   reservedUntil: number | null;
 };
+type BotJob = {
+  key: string;
+  controller: AbortController;
+  timer?: Timer;
+};
 type Room = {
+  mode: "human" | "bot";
+  botJob?: BotJob;
+  botAttempts: Set<string>;
+  botCalls: number;
   id: string;
   visibility: Visibility;
   revision: number;
@@ -162,6 +180,8 @@ export type ServiceOptions = {
   firstPlayer?: () => number;
   log?: (message: string) => void;
   saveResult?: (record: MatchRecord) => Promise<void>;
+  botProvider?: BotProvider;
+  randomIndex?: (length: number) => number;
 };
 const keyOf = (actor: Actor) =>
   actor.userId ? `account:${actor.userId}` : `guest:${actor.sessionId}`;
@@ -170,7 +190,7 @@ const covered = (): PublicCell[] =>
 
 /** One process-wide, synchronous authority. Database writes run after transitions. */
 export class GameService {
-  readonly runtimeVersion = 2;
+  readonly runtimeVersion = 3;
   readonly instanceId = randomUUID();
   private revision = 0;
   private rooms = new Map<string, Room>();
@@ -183,6 +203,11 @@ export class GameService {
     { record: MatchRecord; failed: boolean; saving: boolean; timer?: Timer }
   >();
   private queueTimer?: Timer;
+  private botQuotaTimer?: Timer;
+  private botGames: number[] = [];
+  private botProvider?: BotProvider;
+  private readonly randomIndex;
+
   private checking = false;
   private disposed = false;
   private readonly now;
@@ -206,9 +231,60 @@ export class GameService {
     this.firstPlayer = options.firstPlayer ?? (() => randomInt(2));
     this.log = options.log ?? console.log;
     this.writer = options.saveResult;
+    this.botProvider = options.botProvider;
+    this.randomIndex =
+      options.randomIndex ?? ((length: number) => randomInt(length));
   }
   setResultWriter(writer: NonNullable<ServiceOptions["saveResult"]>) {
     this.writer = writer;
+  }
+  setBotProvider(provider: BotProvider | undefined) {
+    this.botProvider = provider;
+  }
+  private botAvailability() {
+    const recent = this.botGames.filter(
+      (time) => time + 3_600_000 > this.now(),
+    );
+    return {
+      available: !!this.botProvider,
+      remaining: Math.max(0, 3 - recent.length),
+      nextAvailableAt: recent.length >= 3 ? recent[0]! + 3_600_000 : null,
+    };
+  }
+  private reserveBotGame() {
+    const availability = this.botAvailability();
+    if (!availability.available)
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: "Bot play is not configured.",
+      });
+    if (!availability.remaining) {
+      this.log("[bot] quota_rejected");
+      throw new TRPCError({
+        code: "TOO_MANY_REQUESTS",
+        message: `The shared limit of 3 bot games per hour has been reached. Try again after ${new Date(availability.nextAvailableAt!).toISOString()}.`,
+      });
+    }
+    this.botGames = this.botGames.filter(
+      (time) => time + 3_600_000 > this.now(),
+    );
+    this.botGames.push(this.now());
+    this.armBotQuota();
+  }
+  private armBotQuota() {
+    this.cancelTimer(this.botQuotaTimer);
+    const first = this.botGames[0];
+    if (first === undefined) return;
+    this.botQuotaTimer = this.schedule(
+      () => {
+        this.botGames = this.botGames.filter(
+          (time) => time + 3_600_000 > this.now(),
+        );
+        this.armBotQuota();
+        this.publish();
+      },
+      Math.max(0, first + 3_600_000 - this.now()),
+    );
   }
   private fail(
     message: string,
@@ -240,6 +316,7 @@ export class GameService {
   private publish(room?: Room) {
     this.revision++;
     if (room) {
+      this.syncBot(room);
       room.revision = this.revision;
       for (const listener of this.listeners.get(room.id) ?? []) listener();
     }
@@ -247,6 +324,13 @@ export class GameService {
       for (const listener of this.listeners.get(scope) ?? []) listener();
   }
   private connected(key: string, roomId: string | null) {
+    if (
+      roomId &&
+      this.rooms
+        .get(roomId)
+        ?.players.some((p) => p.key === key && p.bot && p.seated)
+    )
+      return true;
     return [...this.presence.values()].some(
       (p) =>
         keyOf(p.actor) === key &&
@@ -277,6 +361,7 @@ export class GameService {
       instanceId: this.instanceId,
       roomId: r.id,
       visibility: r.visibility,
+      mode: r.mode,
       revision: r.revision,
       serverNow: this.now(),
       viewerId: actor
@@ -291,6 +376,7 @@ export class GameService {
         nickname: p.nickname,
         score: p.score,
         account: !!p.userId,
+        ...(p.bot ? { bot: true as const } : {}),
         seated: p.seated,
         connected: p.seated && this.connected(p.key, r.id),
         reservedUntil: p.reservedUntil,
@@ -328,6 +414,7 @@ export class GameService {
       revision: this.revision,
       serverNow: this.now(),
       account: !!actor.userId,
+      bot: this.botAvailability(),
       rooms: [...this.rooms.values()]
         .filter((r) => r.visibility === "public")
         .map((r) => this.summary(r)),
@@ -549,6 +636,9 @@ export class GameService {
     const r: Room = {
       id: randomUUID(),
       visibility,
+      mode: "human",
+      botAttempts: new Set(),
+      botCalls: 0,
       revision: 0,
       matchId: randomUUID(),
       turnId: randomUUID(),
@@ -601,6 +691,36 @@ export class GameService {
     this.publish(r);
     return { roomId: r.id };
   }
+  createBot(actor: Actor, nickname: string) {
+    this.checkTime();
+    this.authenticatedPresence(actor);
+    nickname = this.validateName(nickname);
+    const existing = this.membership.get(keyOf(actor));
+    if (existing) {
+      if (this.room(existing).mode === "bot") return { roomId: existing };
+      this.fail("Leave your current room before playing with a bot.");
+    }
+    if (this.queue.has(keyOf(actor)))
+      this.fail("Cancel matchmaking before playing with a bot.");
+    if (!this.connected(keyOf(actor), null))
+      this.fail("Open the lobby before playing with a bot.");
+    this.reserveBotGame();
+    const r = this.newRoom("unlisted");
+    r.mode = "bot";
+    this.addPlayer(r, keyOf(actor), actor.userId, nickname);
+    r.players.push({
+      id: randomUUID(),
+      key: `bot:${r.id}`,
+      userId: null,
+      bot: true,
+      nickname: "OpenAI Bot",
+      score: 0,
+      seated: true,
+      reservedUntil: null,
+    });
+    this.publish(r);
+    return { roomId: r.id };
+  }
   join(actor: Actor, roomId: string, nickname: string) {
     this.checkTime();
     this.authenticatedPresence(actor);
@@ -611,7 +731,7 @@ export class GameService {
     if (existing === roomId) return this.snapshot(roomId, actor);
     if (existing || this.queue.has(key))
       this.fail("Leave your current room or queue before joining another.");
-    if (r.phase !== "lobby" || r.players.length >= 2)
+    if (r.mode === "bot" || r.phase !== "lobby" || r.players.length >= 2)
       this.fail(
         "Game full. Both player seats are occupied or this match has ended.",
       );
@@ -706,6 +826,9 @@ export class GameService {
       this.begin(r, r.winner!);
   }
   private begin(r: Room, first?: string) {
+    this.cancelBot(r);
+    r.botAttempts.clear();
+    r.botCalls = 0;
     r.matchId = randomUUID();
     r.phase = "active";
     r.cells = covered();
@@ -763,11 +886,17 @@ export class GameService {
     if (input.matchId !== r.matchId || input.turnId !== r.turnId)
       this.fail("This turn has expired or changed. Use the latest board.");
     if (r.activePlayer !== p.id) this.fail("It is not your turn.");
-    const index = input.cellIndex;
+    this.applyReveal(r, p, input.cellIndex);
+    return this.snapshot(r.id, actor);
+  }
+  private applyReveal(r: Room, p: Player, index: number, fallback = false) {
     if (!Number.isInteger(index) || index < 0 || index >= CELL_COUNT)
       this.fail("Invalid cell.");
     if (r.cells[index]!.kind !== "covered")
       this.fail("That cell has already been revealed.");
+    r.message = fallback
+      ? "The bot used a fallback move."
+      : "Find all 11 bombs.";
     if (r.bombs.has(index)) {
       r.cells[index] = { kind: "bomb" };
       p.score++;
@@ -790,7 +919,91 @@ export class GameService {
       this.frame(r, "reveal", index);
     }
     this.publish(r);
-    return this.snapshot(r.id, actor);
+  }
+  private cancelBot(r: Room) {
+    const job = r.botJob;
+    if (!job) return;
+    r.botJob = undefined;
+    this.cancelTimer(job.timer);
+    job.controller.abort();
+  }
+  private botKey(r: Room) {
+    return `${r.matchId}:${r.turnId}:${r.cells.filter((cell) => cell.kind !== "covered").length}`;
+  }
+  private botReady(r: Room) {
+    return (
+      !this.disposed &&
+      this.rooms.get(r.id) === r &&
+      r.mode === "bot" &&
+      r.phase === "active" &&
+      r.deadline !== null &&
+      r.deadline > this.now() &&
+      r.players.some((p) => p.bot && p.seated && p.id === r.activePlayer) &&
+      r.players.some((p) => !p.bot && p.seated && this.connected(p.key, r.id))
+    );
+  }
+  private syncBot(r: Room) {
+    if (r.mode !== "bot") return;
+    const key = this.botKey(r);
+    if (r.botJob && (!this.botReady(r) || r.botJob.key !== key))
+      this.cancelBot(r);
+    if (!this.botReady(r) || r.botJob) return;
+    const job: BotJob = { key, controller: new AbortController() };
+    r.botJob = job;
+    job.timer = this.schedule(() => {
+      this.checkTime();
+      if (r.botJob !== job || !this.botReady(r)) return;
+      const budget = r.deadline! - this.now();
+      const complete = (index: number | null, category: string) => {
+        this.checkTime();
+        if (r.botJob !== job || !this.botReady(r) || this.botKey(r) !== key)
+          return;
+        this.cancelBot(r);
+        const fallback =
+          index === null ||
+          !Number.isInteger(index) ||
+          r.cells[index]?.kind !== "covered";
+        if (fallback) {
+          const choices = r.cells.flatMap((cell, i) =>
+            cell.kind === "covered" ? [i] : [],
+          );
+          if (!choices.length) return;
+          index = choices[this.randomIndex(choices.length)]!;
+          this.log(`[bot] fallback ${category}`);
+        }
+        const bot = r.players.find((p) => p.bot)!;
+        this.applyReveal(r, bot, index!, fallback);
+      };
+      if (
+        budget <= 0 ||
+        r.botAttempts.has(key) ||
+        r.botCalls >= 36 ||
+        !this.botProvider
+      ) {
+        complete(null, "request_unavailable");
+        return;
+      }
+      r.botAttempts.add(key);
+      r.botCalls++;
+      const bot = r.players.find((p) => p.bot)!;
+      const evidence = {
+        cells: r.cells.map((cell) => ({ ...cell })),
+        scores: { self: bot.score, opponent: this.opponent(r, bot.id).score },
+        remainingMs: r.deadline! - this.now(),
+      };
+      const provider = this.botProvider;
+      // The normal turn transition cancels this job; expiry never reveals a fallback cell.
+      job.timer = this.schedule(() => this.checkTime(), budget);
+      void Promise.resolve()
+        .then(() => {
+          if (job.controller.signal.aborted) return null;
+          return provider(evidence, job.controller.signal);
+        })
+        .then(
+          (index) => complete(index, "invalid_move"),
+          () => complete(null, "provider_failure"),
+        );
+    }, 0);
   }
   private frame(r: Room, event: ReplayFrame["event"], cellIndex?: number) {
     if (r.saveStatus !== "recording") return;
@@ -840,6 +1053,7 @@ export class GameService {
     cellIndex?: number,
   ) {
     if (r.phase !== "active") return;
+    this.cancelBot(r);
     r.phase = "finished";
     r.winner = winner;
     r.resultReason = reason;
@@ -918,6 +1132,10 @@ export class GameService {
       r.players.some((p) => !p.seated)
     )
       this.fail("This result is no longer available for a rematch.");
+    if (r.mode === "bot") {
+      this.reserveBotGame();
+      r.votes.add(r.players.find((player) => player.bot)!.id);
+    }
     r.votes.add(p.id);
     this.maybeBegin(r);
     this.publish(r);
@@ -936,6 +1154,11 @@ export class GameService {
   }
   private release(r: Room, p: Player) {
     p.seated = false;
+    if (r.mode === "bot" && !p.bot) {
+      this.cancelBot(r);
+      for (const bot of r.players.filter((player) => player.bot))
+        bot.seated = false;
+    }
     p.reservedUntil = null;
     if (this.membership.get(p.key) === r.id) this.membership.delete(p.key);
     if (r.phase === "lobby") r.players = r.players.filter((p) => p.seated);
@@ -966,6 +1189,7 @@ export class GameService {
     }
   }
   private clearMatch(r: Room, manualStart: boolean, message: string) {
+    this.cancelBot(r);
     this.cancelTimer(r.timer);
     r.matchId = randomUUID();
     r.turnId = randomUUID();
@@ -1010,6 +1234,7 @@ export class GameService {
       !r.players.every((p) => p.seated && this.connected(p.key, r.id))
     )
       this.fail("Two connected players are required.");
+    if (r.mode === "bot") this.reserveBotGame();
     this.begin(r);
     this.publish(r);
     return this.snapshot(roomId);
@@ -1017,7 +1242,11 @@ export class GameService {
   dispose() {
     this.disposed = true;
     this.cancelTimer(this.queueTimer);
-    for (const r of this.rooms.values()) this.cancelTimer(r.timer);
+    this.cancelTimer(this.botQuotaTimer);
+    for (const r of this.rooms.values()) {
+      this.cancelBot(r);
+      this.cancelTimer(r.timer);
+    }
     for (const p of this.pending.values()) this.cancelTimer(p.timer);
     const streams = [...this.presence.values()].flatMap((p) => {
       this.cancelTimer(p.timer);
@@ -1038,10 +1267,10 @@ const globalGame = globalThis as typeof globalThis & {
 };
 const game = (globalGame.findMyMinesGame ??= new GameService());
 // Never change the prototype of an older authority: its live callbacks must keep working.
-if (game.runtimeVersion === 2)
+if (game.runtimeVersion === 3)
   Object.setPrototypeOf(game, GameService.prototype);
 export function getGame() {
-  if (game.runtimeVersion !== 2)
+  if (game.runtimeVersion !== 3)
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
       message:

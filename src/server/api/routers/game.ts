@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { env } from "~/env";
+import { createBotProvider } from "~/server/game/bot";
 import { createAnalysisService } from "~/server/game/analysis";
 import {
   createTRPCRouter,
@@ -21,6 +22,11 @@ import {
   setVisibility,
 } from "~/server/game/history";
 
+const botProvider = createBotProvider({
+  apiKey: env.OPENAI_API_KEY,
+  model: env.OPENAI_BOT_MODEL,
+});
+
 const analysisService = createAnalysisService(
   { analysisSource, readAnalysis, saveAnalysis },
   { apiKey: env.OPENAI_API_KEY, model: env.OPENAI_ANALYSIS_MODEL },
@@ -29,6 +35,7 @@ const analysisService = createAnalysisService(
 const gameProcedure = publicProcedure.use(({ ctx, next }) => {
   const game = getGame();
   game.setResultWriter(saveResult);
+  game.setBotProvider(botProvider);
   const actor: Actor = {
     sessionId: ctx.gameSession.id,
     userId: ctx.session?.user.id ?? null,
@@ -73,6 +80,11 @@ export const gameRouter = createTRPCRouter({
     .input(z.object({ nickname, visibility: z.enum(["public", "unlisted"]) }))
     .mutation(({ ctx, input }) =>
       ctx.game.create(ctx.actor, input.nickname, input.visibility),
+    ),
+  createBot: gameProcedure
+    .input(z.object({ nickname }))
+    .mutation(({ ctx, input }) =>
+      ctx.game.createBot(ctx.actor, input.nickname),
     ),
   join: gameProcedure
     .input(roomInput.extend({ nickname }))

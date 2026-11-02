@@ -28,6 +28,46 @@ Accounts use Better Auth's HTTP-only session cookies and the existing PostgreSQL
 
 Account seats belong to the verified Better Auth account across browsers and devices. Guests own seats through signed HTTP-only game cookies. One identity can occupy one room or one matchmaking queue entry at a time; an account cannot play against itself. Account changes never transfer an existing seat. Closing or changing the account's last room connection starts the normal reconnect grace period. Accounts do not grant operator permissions.
 
+## Play with bot
+
+Guests and signed-in players can use **Play with bot** in the lobby. Configure
+`OPENAI_BOT_MODEL` with a Responses-compatible model that supports strict structured
+outputs, alongside the existing server-only `OPENAI_API_KEY`. Analysis continues
+using its separate `OPENAI_ANALYSIS_MODEL` setting. No database migration is needed.
+
+Bot games are unlisted practice rooms with a spectator link, normal 10-second
+turns, and automatic bot rematch acceptance. They never save results, replays, or
+analysis. The bot sees only public cells, clues, anonymous scores, and remaining
+time, with a labeled grid, cell coordinates, legal moves, and explicit visible
+neighbors for each clue. The prompt explains bomb counting and overlapping clues
+and provides hypothetical deduction examples; the model performs all deductions.
+It cannot see hidden bombs or read the message board. OpenAI requests use
+`store: false` (this does not disable all provider retention).
+
+The server allows **three bot games total per rolling hour**, shared by all
+guests and accounts. Creating a room, accepting a rematch, or starting again after
+an operator reset consumes a slot. Duplicate creation requests and rejected
+actions do not; leaving or abandoning a game does not refund it. The lobby shows
+remaining slots and when the next slot becomes available. The quota is in memory
+and resets on a server restart.
+
+Requests start immediately after the game transition and may use all time remaining
+in the normal 10-second turn, with no retries and at most 36 API calls per match.
+Finding a bomb keeps the original deadline; the next request gets only the remaining
+time. Responses are applied as soon as they arrive. At the deadline, pending work
+is canceled and play passes normally, without revealing a fallback cell. API errors
+or invalid responses received before the deadline use a random covered cell and
+display a fallback notice. Disconnecting cancels pending work; timers and normal
+reconnect grace continue. The bot room closes when its human leaves or their
+reservation expires.
+
+This change updates the retained game authority to runtime version 3. After
+existing games end, the server owner must deliberately restart the application
+to load the new fields and environment setting. Development reloads never replace
+the old authority automatically. Automated bot tests mock OpenAI; verify the
+chosen model's latency and structured-output support in a configured practice
+game before deployment.
+
 ## Rooms, matchmaking, history and replays
 
 - Create a public room, listed in the lobby, or an invite-only room, accessible to anyone with its unlisted link. Share `/game/<roomId>` to invite an opponent or spectator. Public rooms can be watched from the lobby. Initial matches start when both seated players are connected to the room.

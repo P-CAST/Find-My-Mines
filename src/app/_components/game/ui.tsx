@@ -70,6 +70,7 @@ export function PlayerScore({
         <div className="stat-title break-words whitespace-normal">
           {player.nickname}
           {own ? " (you)" : ""}
+          {player.bot && <span className="badge badge-outline ml-2">Bot</span>}
         </div>
         <div className="stat-value text-primary">{player.score}</div>
         <div className="stat-desc">

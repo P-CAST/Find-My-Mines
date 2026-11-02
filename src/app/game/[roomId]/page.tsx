@@ -85,7 +85,11 @@ export default function RoomPage() {
               );
           }}
         >
-          {copied ? "Link copied" : "Copy invite link"}
+          {copied
+            ? "Link copied"
+            : state?.mode === "bot"
+              ? "Copy spectator link"
+              : "Copy invite link"}
         </button>
         {me && (
           <button
@@ -134,55 +138,64 @@ export default function RoomPage() {
               }
             >
               <p role="status">{state.message}</p>
-              {state.phase === "lobby" && !me && state.players.length < 2 && (
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    join.mutate({ roomId, nickname });
-                  }}
-                >
-                  <fieldset className="fieldset">
-                    <legend className="fieldset-legend">Your nickname</legend>
-                    <input
-                      className="input w-full"
-                      aria-label="Nickname"
-                      value={nickname}
-                      onChange={(e) => setNickname(e.target.value)}
-                      maxLength={24}
-                      required
-                      autoComplete="nickname"
-                    />
-                    <button
-                      className="btn btn-primary mt-2"
-                      disabled={
-                        !connected || join.isPending || !nickname.trim()
-                      }
-                    >
-                      Join
-                    </button>
-                  </fieldset>
-                </form>
-              )}
+              {state.mode !== "bot" &&
+                state.phase === "lobby" &&
+                !me &&
+                state.players.length < 2 && (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      join.mutate({ roomId, nickname });
+                    }}
+                  >
+                    <fieldset className="fieldset">
+                      <legend className="fieldset-legend">Your nickname</legend>
+                      <input
+                        className="input w-full"
+                        aria-label="Nickname"
+                        value={nickname}
+                        onChange={(e) => setNickname(e.target.value)}
+                        maxLength={24}
+                        required
+                        autoComplete="nickname"
+                      />
+                      <button
+                        className="btn btn-primary mt-2"
+                        disabled={
+                          !connected || join.isPending || !nickname.trim()
+                        }
+                      >
+                        Join
+                      </button>
+                    </fieldset>
+                  </form>
+                )}
               {state.phase === "lobby" && me && (
                 <p>
                   {state.manualStart
                     ? "The operator will start when both players are connected."
-                    : "Play starts when both players have joined and opened this room."}
+                    : state.mode === "bot"
+                      ? "Play starts when you connect to this room."
+                      : "Play starts when both players have joined and opened this room."}
                 </p>
               )}
               <p className="text-sm">
-                {state.players.some((p) => !p.account)
-                  ? "Guest game · no result or replay will be saved."
-                  : state.phase === "lobby"
-                    ? "Two account players save a result and replay. A guest opponent makes this game unrecorded."
-                    : "Account game · result and replay are recorded."}
+                {state.mode === "bot"
+                  ? "Bot practice · no saved result or replay."
+                  : state.players.some((p) => !p.account)
+                    ? "Guest game · no result or replay will be saved."
+                    : state.phase === "lobby"
+                      ? "Two account players save a result and replay. A guest opponent makes this game unrecorded."
+                      : "Account game · result and replay are recorded."}
               </p>
               {state.phase === "active" && (
                 <>
                   <p role="status" className="text-lg font-semibold">
                     {state.activePlayer === me?.id
                       ? "Your turn"
-                      : `${active?.nickname}'s turn`}
+                      : active?.bot
+                        ? "Bot is choosing…"
+                        : `${active?.nickname}'s turn`}
                   </p>
                   <TurnTimer
                     key={state.turnId}
@@ -237,8 +250,10 @@ export default function RoomPage() {
                           Rematch
                         </button>
                         <p>
-                          {state.rematchVotes.length}/2 votes · the previous
-                          winner starts.
+                          {state.mode === "bot"
+                            ? "The bot accepts automatically · rematches use the shared hourly limit."
+                            : `${state.rematchVotes.length}/2 votes`}{" "}
+                          The previous winner starts.
                         </p>
                       </>
                     )}

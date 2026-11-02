@@ -26,6 +26,10 @@ export default function GameLobby() {
     onError,
     onSuccess: (result) => router.push(`/game/${result.roomId}`),
   });
+  const bot = api.game.createBot.useMutation({
+    onError,
+    onSuccess: (result) => router.push(`/game/${result.roomId}`),
+  });
   const queue = api.game.queueJoin.useMutation({
     onError,
     onSuccess: (result) => {
@@ -50,6 +54,7 @@ export default function GameLobby() {
   const busy =
     connection !== "connected" ||
     create.isPending ||
+    bot.isPending ||
     queue.isPending ||
     cancel.isPending ||
     !nickname.trim();
@@ -69,7 +74,7 @@ export default function GameLobby() {
       )}
       <div className="grid items-stretch gap-5 md:grid-cols-2">
         <Panel title="Play a game">
-          <p>Find an opponent or create a room to challenge a friend.</p>
+          <p>Find an opponent, practice with a bot, or challenge a friend.</p>
           {lobby?.roomId ? (
             <>
               <p>You already have a seat in a room.</p>
@@ -118,6 +123,24 @@ export default function GameLobby() {
                   >
                     Find opponent
                   </button>
+                  <button
+                    className="btn btn-primary"
+                    disabled={
+                      busy || !lobby?.bot.available || !lobby.bot.remaining
+                    }
+                    onClick={() => bot.mutate({ nickname })}
+                  >
+                    {bot.isPending ? "Creating bot game…" : "Play with bot"}
+                  </button>
+                  <p className="text-sm" role="status">
+                    {!lobby
+                      ? "Connecting to bot availability…"
+                      : !lobby.bot.available
+                        ? "Bot play is not configured."
+                        : lobby.bot.remaining
+                          ? `Bot practice · ${lobby.bot.remaining}/3 games available this hour, shared by everyone. No result or replay is saved.`
+                          : `All 3 shared bot games have been used. Next available at ${new Date(lobby.bot.nextAvailableAt!).toLocaleTimeString()}.`}
+                  </p>
                   <label className="fieldset">
                     <span className="fieldset-legend">Room visibility</span>
                     <select
