@@ -62,9 +62,6 @@ export default function GameLobby() {
     <PageShell>
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-3xl font-bold">Game lobby</h1>
-        <Link className="btn btn-sm" href="/game/leaderboard">
-          Leaderboard
-        </Link>
         <ConnectionStatus status={connection} />
       </div>
       {error && (
