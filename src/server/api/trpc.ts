@@ -34,6 +34,7 @@ export const createTRPCContext = async (opts: {
 }) => {
   const session = await auth.api.getSession({
     headers: opts.headers,
+    query: { disableCookieCache: true },
   });
   const responseHeaders = opts.responseHeaders ?? new Headers();
   return {

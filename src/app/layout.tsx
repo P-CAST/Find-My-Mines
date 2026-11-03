@@ -9,6 +9,7 @@ import { Geist } from "next/font/google";
 
 import { api } from "~/trpc/react";
 import { TRPCReactProvider } from "~/trpc/react";
+import { isOperator } from "~/lib/operator";
 import { authClient } from "~/server/better-auth/client";
 
 const geist = Geist({
@@ -211,7 +212,9 @@ export default function RootLayout({
                     { href: "/friends", label: "Friends" },
                     { href: "/game/achievements", label: "Achievements" },
                     { href: "/game/history", label: "History & replays" },
-                    { href: "/operator", label: "Operator" },
+                    ...(isOperator(session?.user)
+                      ? [{ href: "/operator", label: "Operator" }]
+                      : []),
                   ].map(({ href, label }) => (
                     <li key={href}>
                       <Link

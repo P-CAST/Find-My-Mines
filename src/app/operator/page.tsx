@@ -14,31 +14,25 @@ export default function OperatorPage() {
     retry: false,
     refetchOnWindowFocus: false,
   });
-  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [data, setData] = useState<ClientsSnapshot>();
   const [selected, setSelected] = useState("");
   const [room, setRoom] = useState<GameSnapshot>();
   const [resetTarget, setResetTarget] = useState<string>();
   const modal = useRef<HTMLDialogElement>(null);
-  const onError = (cause: { message: string }) => setError(cause.message);
-  const login = api.game.login.useMutation({
-    onError,
-    onSuccess: () => {
-      setPassword("");
-      setError("");
-      void session.refetch();
-    },
-  });
-  const logout = api.game.logout.useMutation({
-    onError,
-    onSuccess: () => {
+  const onError = (cause: {
+    message: string;
+    data?: { code?: string } | null;
+  }) => {
+    setError(cause.message);
+    if (["UNAUTHORIZED", "FORBIDDEN"].includes(cause.data?.code ?? "")) {
       setData(undefined);
       setRoom(undefined);
       setSelected("");
+      modal.current?.close();
       void session.refetch();
-    },
-  });
+    }
+  };
   const reset = api.game.reset.useMutation({
     onError,
     onSuccess: () => {
@@ -87,24 +81,15 @@ export default function OperatorPage() {
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-3xl font-bold">Operator dashboard</h1>
         {session.data?.operator && (
-          <>
-            <ConnectionStatus
-              status={
-                connected
-                  ? "connected"
-                  : stream.status === "connecting"
-                    ? "reconnecting"
-                    : "disconnected"
-              }
-            />
-            <button
-              className="btn btn-sm"
-              disabled={logout.isPending}
-              onClick={() => logout.mutate()}
-            >
-              Log out
-            </button>
-          </>
+          <ConnectionStatus
+            status={
+              connected
+                ? "connected"
+                : stream.status === "connecting"
+                  ? "reconnecting"
+                  : "disconnected"
+            }
+          />
         )}
       </div>
       {(error || session.error) && (
@@ -125,32 +110,8 @@ export default function OperatorPage() {
       {session.isPending ? (
         <span className="loading loading-spinner" />
       ) : !session.data?.operator ? (
-        <Panel title="Operator login">
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              login.mutate({ password });
-            }}
-          >
-            <fieldset className="fieldset">
-              <legend className="fieldset-legend">Operator password</legend>
-              <input
-                type="password"
-                className="input w-full"
-                aria-label="Operator password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete="current-password"
-                required
-              />
-              <button
-                className="btn btn-primary mt-2"
-                disabled={login.isPending || !password}
-              >
-                Log in
-              </button>
-            </fieldset>
-          </form>
+        <Panel title="Administrator access required">
+          <p>Your account no longer has access to this dashboard.</p>
         </Panel>
       ) : !data ? (
         <Panel title="Loading dashboard">

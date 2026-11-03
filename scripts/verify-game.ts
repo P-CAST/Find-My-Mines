@@ -1,6 +1,6 @@
 /** Runs against an existing, empty classroom server. Never starts/stops a server. */
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { loadEnvFile } from "node:process";
 import {
   createTRPCClient,
   httpBatchStreamLink,
@@ -17,15 +17,19 @@ import type {
 import type { BoardSnapshot } from "../src/server/messages/service";
 import { SERVER_ORIGIN } from "../src/lib/game-config";
 
+for (const file of [".env", ".env.operator.local"]) {
+  try {
+    loadEnvFile(file);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
 const origin = process.env.GAME_TEST_ORIGIN ?? SERVER_ORIGIN;
-const password =
-  process.env.GAME_OPERATOR_PASSWORD ??
-  /^GAME_OPERATOR_PASSWORD=["']?([^\r\n"']+)/m.exec(
-    readFileSync(".env", "utf8"),
-  )?.[1];
+const email = process.env.GAME_TEST_ADMIN_EMAIL;
+const password = process.env.GAME_TEST_ADMIN_PASSWORD;
 assert.ok(
-  password,
-  "Set GAME_OPERATOR_PASSWORD before running integration verification.",
+  email && password,
+  "Set GAME_TEST_ADMIN_EMAIL and GAME_TEST_ADMIN_PASSWORD for an existing administrator.",
 );
 function client() {
   const cookies = new Map<string, string>();
@@ -55,12 +59,7 @@ function client() {
         true: httpLink({ ...options, url: `${origin}/api/messages` }),
         false: splitLink({
           condition: (op) =>
-            [
-              "game.session",
-              "game.setGuestName",
-              "game.login",
-              "game.logout",
-            ].includes(op.path),
+            ["game.session", "game.setGuestName"].includes(op.path),
           true: httpLink(options),
           false: httpBatchStreamLink(options),
         }),
@@ -122,6 +121,7 @@ async function stream<T>(
   });
   return {
     snapshots,
+    error: () => failure,
     close: async () => {
       abort.abort();
       await done;
@@ -189,9 +189,15 @@ try {
     /fixed/,
   );
   const dummy = { roomId: "00000000-0000-0000-0000-000000000000" };
-  await assert.rejects(a.api.game.reset.mutate(dummy), /Operator login/);
-  await assert.rejects(a.api.game.start.mutate(dummy), /Operator login/);
-  await op.api.game.login.mutate({ password });
+  await assert.rejects(a.api.game.reset.mutate(dummy), /Account login/);
+  await assert.rejects(a.api.game.start.mutate(dummy), /Account login/);
+  const login = await op.transport(`${origin}/api/auth/sign-in/email`, {
+    method: "POST",
+    headers: { "content-type": "application/json", origin },
+    body: JSON.stringify({ email, password }),
+  });
+  assert.equal(login.ok, true, "Administrator login failed.");
+  assert.equal((await op.api.game.session.query()).operator, true);
   const dashboard = await stream<ClientsSnapshot>(op, "game.onClients");
   closers.push(dashboard.close);
   const initial = await until(() => dashboard.latest(), "operator snapshot");
@@ -417,8 +423,18 @@ try {
   );
   assert.equal(aState.latest()!.winner, aid);
   assert.equal(aState.latest()!.saveStatus, "unrecorded");
-  await op.api.game.logout.mutate();
-  await assert.rejects(op.api.game.reset.mutate(first), /Operator login/);
+  const logout = await op.transport(`${origin}/api/auth/sign-out`, {
+    method: "POST",
+    headers: { "content-type": "application/json", origin },
+    body: "{}",
+  });
+  assert.equal(logout.ok, true);
+  await until(
+    () => dashboard.error(),
+    "operator stream revocation after logout",
+    10000,
+  );
+  await assert.rejects(op.api.game.reset.mutate(first), /Account login/);
   console.log(
     "PASS: isolated messaging HTTP/SSE, global fanout/history, posting limits, two isolated rooms, server timers, duplicate tabs, reconnect, operator controls, and guest forfeit despite messaging connections.",
   );
@@ -429,4 +445,11 @@ try {
   for (const owner of players)
     await owner.api.game.queueCancel.mutate().catch(() => undefined);
   await Promise.all(closers.map((close) => close()));
+  await op
+    .transport(`${origin}/api/auth/sign-out`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin },
+      body: "{}",
+    })
+    .catch(() => undefined);
 }

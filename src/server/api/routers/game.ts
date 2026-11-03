@@ -1,10 +1,13 @@
-import { ratingStore } from "~/server/game/ratings";
-import { achievementStore } from "~/server/game/achievements";
-import { friendStore } from "~/server/friends";
-import { social } from "~/server/friends/service";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+
 import { env } from "~/env";
+import { isOperator } from "~/lib/operator";
+import { requireOperator } from "~/server/better-auth/operator";
+import { friendStore } from "~/server/friends";
+import { social } from "~/server/friends/service";
+import { achievementStore } from "~/server/game/achievements";
+import { ratingStore } from "~/server/game/ratings";
 import { createBotProvider } from "~/server/game/bot";
 import { createAnalysisService } from "~/server/game/analysis";
 import {
@@ -14,13 +17,7 @@ import {
 } from "~/server/api/trpc";
 import { getGame, type Actor } from "~/server/game/service";
 import { gameStream } from "~/server/game/stream";
-import {
-  operatorLogin,
-  operatorLogout,
-  nicknameInput,
-  setGuestName,
-  playerName,
-} from "~/server/game/session";
+import { nicknameInput, setGuestName, playerName } from "~/server/game/session";
 import {
   history,
   profile,
@@ -53,12 +50,8 @@ const gameProcedure = publicProcedure.use(({ ctx, next }) => {
   };
   return next({ ctx: { ...ctx, game, actor } });
 });
-const operatorProcedure = gameProcedure.use(({ ctx, next }) => {
-  if (!ctx.gameSession.operator)
-    throw new TRPCError({
-      code: "UNAUTHORIZED",
-      message: "Operator login required.",
-    });
+const operatorProcedure = gameProcedure.use(async ({ ctx, next }) => {
+  await requireOperator(ctx.headers);
   return next();
 });
 const roomInput = z.object({ roomId: z.string().uuid() });
@@ -178,7 +171,7 @@ export const gameRouter = createTRPCRouter({
     ),
   session: gameProcedure.query(({ ctx }) => ({
     id: ctx.gameSession.id,
-    operator: ctx.gameSession.operator,
+    operator: isOperator(ctx.session?.user),
     account: !!ctx.actor.userId,
     nickname:
       ctx.session?.user.name != null
@@ -279,6 +272,7 @@ export const gameRouter = createTRPCRouter({
     ),
   onClients: operatorProcedure.subscription(({ ctx, signal }) =>
     gameStream({
+      authorize: () => requireOperator(ctx.headers),
       snapshot: () => ctx.game.clients(),
       listen: (listener) => ctx.game.listen("operator", listener),
       signal,
@@ -289,6 +283,7 @@ export const gameRouter = createTRPCRouter({
     .input(roomInput)
     .subscription(({ ctx, input, signal }) =>
       gameStream({
+        authorize: () => requireOperator(ctx.headers),
         snapshot: () => ctx.game.snapshot(input.roomId),
         isTerminal: (snapshot) => snapshot.phase === "closed",
         listen: (listener) => ctx.game.listen(input.roomId, listener),
@@ -301,21 +296,6 @@ export const gameRouter = createTRPCRouter({
   start: operatorProcedure
     .input(roomInput)
     .mutation(({ ctx, input }) => ctx.game.start(input.roomId)),
-  login: gameProcedure
-    .input(z.object({ password: z.string().min(1).max(256) }))
-    .mutation(({ ctx, input }) => {
-      operatorLogin(
-        ctx.gameSession.id,
-        input.password,
-        ctx.responseHeaders,
-        ctx.gameSession.secure,
-      );
-      return { success: true };
-    }),
-  logout: gameProcedure.mutation(({ ctx }) => {
-    operatorLogout(ctx.responseHeaders, ctx.gameSession.secure);
-    return { success: true };
-  }),
   profile: protectedProcedure.query(({ ctx }) => profile(ctx.session.user.id)),
   setVisibility: protectedProcedure
     .input(z.object({ historyPublic: z.boolean() }))

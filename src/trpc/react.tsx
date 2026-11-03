@@ -76,11 +76,8 @@ export function TRPCReactProvider(props: { children: React.ReactNode }) {
     api.createClient({
       links: [
         loggerLink({
-          // Never log operator password inputs (including on failed responses).
           enabled: (op) =>
-            op.direction === "up" &&
-            op.path !== "game.login" &&
-            process.env.NODE_ENV === "development",
+            op.direction === "up" && process.env.NODE_ENV === "development",
         }),
         splitLink({
           condition: (op) => op.path.startsWith("messages."),
@@ -107,12 +104,7 @@ export function TRPCReactProvider(props: { children: React.ReactNode }) {
             }),
             false: splitLink({
               condition: (op) =>
-                [
-                  "game.session",
-                  "game.setGuestName",
-                  "game.login",
-                  "game.logout",
-                ].includes(op.path),
+                ["game.session", "game.setGuestName"].includes(op.path),
               true: httpLink({
                 transformer: SuperJSON,
                 url: SERVER_ORIGIN + "/api/trpc",

@@ -290,7 +290,6 @@ void test(
       session: null,
       gameSession: {
         id: randomUUID(),
-        operator: false,
         secure: false,
         guestName: null,
       },

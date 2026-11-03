@@ -36,6 +36,20 @@
       "when": 1793708505291,
       "tag": "0004_white_tomas",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1793718127881,
+      "tag": "0005_better_auth_admin",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793718234564,
+      "tag": "0006_seed_operator",
+      "breakpoints": true
     }
   ]
 }

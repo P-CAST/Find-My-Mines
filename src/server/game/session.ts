@@ -9,14 +9,9 @@ import { z } from "zod";
 
 const processState = globalThis as typeof globalThis & {
   findMyMinesSigningKey?: string;
-  findMyMinesLoginAttempts?: Map<string, { count: number; until: number }>;
 };
 const signingKey = (processState.findMyMinesSigningKey ??=
   randomBytes(32).toString("hex"));
-const attempts = (processState.findMyMinesLoginAttempts ??= new Map<
-  string,
-  { count: number; until: number }
->());
 const SESSION_COOKIE = "mines-session";
 const GUEST_NAME_COOKIE = "mines-guest-name";
 export const nicknameInput = z
@@ -25,7 +20,6 @@ export const nicknameInput = z
   .min(1)
   .max(24)
   .refine((value) => !/[\p{C}]/u.test(value), "Use 1–24 visible characters.");
-const OPERATOR_COOKIE = "mines-operator";
 function sign(value: string, key = signingKey) {
   return createHmac("sha256", key).update(value).digest("hex");
 }
@@ -79,16 +73,6 @@ export function gameSession(
       secure,
     );
   }
-  const operatorCookie = readCookie(headers, OPERATOR_COOKIE);
-  const [expiry, operatorSignature] = operatorCookie?.split(".") ?? [];
-  const secret = process.env.GAME_OPERATOR_PASSWORD;
-  const operator = !!(
-    secret &&
-    expiry &&
-    operatorSignature &&
-    Number(expiry) > Date.now() &&
-    equal(operatorSignature, sign(`${id}.${expiry}`, secret))
-  );
   let guestName: string | null = null;
   const nameCookie = readCookie(headers, GUEST_NAME_COOKIE);
   const [payload, nameSignature] = nameCookie?.split(".") ?? [];
@@ -106,54 +90,8 @@ export function gameSession(
       // Invalid name cookies never supply a display name.
     }
   }
-  return { id, operator, secure, guestName };
+  return { id, secure, guestName };
 }
-export function operatorLogin(
-  id: string,
-  password: string,
-  responseHeaders: Headers,
-  secure: boolean,
-) {
-  const secret = process.env.GAME_OPERATOR_PASSWORD;
-  if (!secret || secret.length < 16)
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message:
-        "Set GAME_OPERATOR_PASSWORD to at least 16 characters in .env on the server.",
-    });
-  const now = Date.now();
-  for (const [key, value] of attempts)
-    if (value.until <= now) attempts.delete(key);
-  // Global cap as well as per-session cap prevents fresh cookies bypassing the limit.
-  for (const key of [id, "all"]) {
-    const entry = attempts.get(key) ?? { count: 0, until: now + 60_000 };
-    if (entry.count >= (key === "all" ? 30 : 5))
-      throw new TRPCError({
-        code: "TOO_MANY_REQUESTS",
-        message: "Too many login attempts. Try again in a minute.",
-      });
-    entry.count++;
-    attempts.set(key, entry);
-  }
-  if (!equal(sign(password), sign(secret)))
-    throw new TRPCError({
-      code: "UNAUTHORIZED",
-      message: "Incorrect operator password.",
-    });
-  attempts.delete(id);
-  const expiry = String(now + 8 * 60 * 60 * 1000);
-  setCookie(
-    responseHeaders,
-    OPERATOR_COOKIE,
-    `${expiry}.${sign(`${id}.${expiry}`, secret)}`,
-    8 * 60 * 60,
-    secure,
-  );
-}
-export function operatorLogout(responseHeaders: Headers, secure: boolean) {
-  setCookie(responseHeaders, OPERATOR_COOKIE, "", 0, secure);
-}
-
 /** The name is a display label; authorization remains the signed session ID. */
 export function setGuestName(
   session: ReturnType<typeof gameSession>,

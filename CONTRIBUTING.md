@@ -77,3 +77,18 @@ transitions. Public leaderboard reads expose only public identity and aggregate
 statistics; match deltas require an authenticated participant. Keep friend-search
 profile insertion aligned with the Drizzle profile schema. Migration 0004 is
 additive; drain games and saves before owner-managed activation, without backfill.
+
+## Operator authorization
+
+Use Better Auth's Admin plugin and persisted `admin` role for operator access.
+Apply migrations 0005 and 0006 before activating the updated app. The initial
+operator is seeded through a custom Drizzle SQL migration; never commit its
+plaintext password or accept role fields from registration/profile inputs.
+Keep checks on the server for commands, pages, and subscriptions. Operator SSE
+revalidates before delivery and every five seconds and releases listeners/timers
+on revocation or failure, without establishing player presence. Preserve the
+existing dashboard; use Better Auth's authenticated administrative APIs for
+account management. The PostgreSQL auth/migration checks use rolled-back temporary
+tables: `GAME_TEST_DATABASE=1 pnpm exec tsx --env-file=.env --test tests/operator-database.test.ts`.
+Integration verification uses `GAME_TEST_ADMIN_EMAIL`/`GAME_TEST_ADMIN_PASSWORD`
+from the environment or ignored local env files, against an empty existing lobby.

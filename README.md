@@ -14,7 +14,7 @@ pnpm dev
 
 `pnpm dev` runs the normal Next.js development server on port 3000, using `.next` for development output. Do not start another server if one is already running. For a persistent classroom deployment, configure the production address below, run `pnpm build` once, then `pnpm start`. Use exactly one application instance. Keep it running for the demonstration. Set the existing `DATABASE_URL` and Better Auth configuration as before; `BETTER_AUTH_SECRET` is required for production. Apply the checked-in Drizzle migrations with `pnpm db:migrate` before using account history and replays. The room/history update adds two tables and requires a deliberate user-managed application restart because the in-memory service shape changed.
 
-`pnpm build` produces a deployable Node application in `dist/standalone`, including its traced dependencies, public files, compiled browser assets, and public production IP/port defaults. Copy that entire directory to the deployment host; no source checkout or dependency installation is needed there. Production builds use `dist` and leave `.next` untouched. Build-machine `.env` files are removed from the bundle. Create a runtime `.env` beside `server.js` on the VPS with `DATABASE_URL`, `BETTER_AUTH_SECRET`, and `GAME_OPERATOR_PASSWORD`, then run from that directory:
+`pnpm build` produces a deployable Node application in `dist/standalone`, including its traced dependencies, public files, compiled browser assets, and public production IP/port defaults. Copy that entire directory to the deployment host; no source checkout or dependency installation is needed there. Production builds use `dist` and leave `.next` untouched. Build-machine `.env` files are removed from the bundle. Create a runtime `.env` beside `server.js` on the VPS with `DATABASE_URL` and `BETTER_AUTH_SECRET`, then run from that directory:
 
 ```sh
 node server.js
@@ -26,7 +26,7 @@ Open `/` for the homepage, `/game` for rooms and matchmaking, `/game/history` fo
 
 Accounts use Better Auth's HTTP-only session cookies and the existing PostgreSQL `user`, `account`, `session`, and `verification` tables. Configure `DATABASE_URL` and `BETTER_AUTH_SECRET`; Better Auth uses the same canonical origin as the game. For a fresh database, apply the existing Drizzle migrations with `pnpm db:migrate` before using accounts. Do not reapply the initial migration to a database already created with `db:push` without reconciling its migration history. Game profiles and saved results use the additional `pg-drizzle_game_profile` and `pg-drizzle_game_result` tables. Email verification, password recovery, and social login are not configured.
 
-Account seats belong to the verified Better Auth account across browsers and devices. Guests own seats through signed HTTP-only game cookies. One identity can occupy one room or one matchmaking queue entry at a time; an account cannot play against itself. Account changes never transfer an existing seat. Closing or changing the account's last room connection starts the normal reconnect grace period. Accounts do not grant operator permissions.
+Account seats belong to the verified Better Auth account across browsers and devices. Guests own seats through signed HTTP-only game cookies. One identity can occupy one room or one matchmaking queue entry at a time; an account cannot play against itself. Account changes never transfer an existing seat. Closing or changing the account's last room connection starts the normal reconnect grace period. Only accounts with the Better Auth `admin` role grant operator permissions.
 
 ## Play with bot
 
@@ -200,15 +200,38 @@ For a reverse proxy, set `PORT` at runtime to the internal Node listening port w
 
 ## Operator setup
 
-Set a private password of at least 16 characters in the server's ignored `.env`:
+Operators use ordinary Better Auth email/password login. Only accounts with the
+`admin` role can open `/operator`, inspect rooms, Reset, or Start. Ordinary accounts
+and guests do not see its navigation entry. Direct unauthenticated visits return
+to homepage login and then the dashboard; signed-in non-administrators receive a
+not-found page. The dashboard retains room-specific controls and confirmations.
+Account logout in the navigation drawer also logs the operator out.
 
-```dotenv
-GAME_OPERATOR_PASSWORD="replace-with-a-long-private-password"
-```
+Apply migrations `0005_better_auth_admin` and `0006_seed_operator` with
+`pnpm db:migrate` (or `pnpm db:migrate:vps`) before activating the updated app.
+Existing users remain ordinary users. The seed creates `admin@example.com` as
+one Operator user, its
+Better Auth credential account, and its game profile. Its email and password hash
+are in the seed migration; the generated plaintext password is delivered locally
+in the ignored, owner-readable `.env.operator.local`, which must not be deployed
+or committed. Every database applying this seed gets the same initial login;
+change the password through Better Auth's change-password API for independent
+deployments. Re-running migrations does not reset the password. An existing seed
+email causes a migration error rather than promoting or overwriting that account.
 
-Open `/operator` and log in. There is no default password. The operator secret is read only on the server and is never shipped as a browser constant. Login is rate limited, and the signed HTTP-only operator cookie lasts eight hours. Reset, Start, and operator subscriptions enforce authorization on the server. The dashboard lists all rooms and queue/session totals; select a room to inspect or control it. Reset confirmation is bound to that room ID and never resets other rooms. Logging out removes operator authorization. Existing streams are authorized when opened; the dashboard closes its stream on logout. Do not share a logged-in operator browser profile with players.
+The Better Auth Admin plugin supplies account roles and administrative APIs;
+this change adds no user-management UI. Role changes can be made through its
+server-authorized APIs. New registrations cannot assign themselves a role.
+Operator commands check persisted authorization, and live subscriptions check
+before each delivery and every five seconds while idle. Logout, session expiry
+or revocation, bans, and role removal terminate privileged streams. Database
+validation failures also stop delivery. Operator streams never establish player
+presence.
 
-If a local password was generated during implementation, it is in your existing `.env`. Changing environment variables in a production deployment requires restarting the application, which also clears the game.
+The old shared password and operator cookies no longer authorize anything.
+Remove `GAME_OPERATOR_PASSWORD` from deployment configuration. Keep the running
+development server under its owner's control; production activation/restarts
+must be scheduled after draining live games and pending saves.
 
 ## Rules and runtime
 
@@ -218,12 +241,12 @@ The server samples 11 distinct random bombs on a covered 6×6 board, rejecting a
 
 The service is retained on `globalThis` to avoid duplicate services, timers, or listeners under development module reloads. Both GET subscriptions and POST mutations use the same route and service. The integration script verifies their shared instance ID and observable state, not just the source-code arrangement. Development reloads refresh service methods while preserving the instance. Changes to the shape of its stored fields require a deliberate server restart; ordinary UI and method edits do not. An incompatible retained service returns a clear restart-required error instead of reinterpreting its state or creating a second authority. Never restart a user's server automatically.
 
-**Single-process limitation:** `globalThis` is not shared across processes or workers. Run one persistent Next.js Node application serving this route, with no cluster mode, extra replicas, serverless functions, separate game worker, or load-balanced instances. Restarting it loses live rooms, queue entries, game sessions, scores, votes, operator cookies, and unsaved result retries. Saved account results, replays, and privacy preferences remain in PostgreSQL. This is an in-memory multi-room deployment with persistent completed account history. If multi-process deployment becomes necessary, game authority must move to transaction-safe storage rather than relying on this singleton.
+**Single-process limitation:** `globalThis` is not shared across processes or workers. Run one persistent Next.js Node application serving this route, with no cluster mode, extra replicas, serverless functions, separate game worker, or load-balanced instances. Restarting it loses live rooms, queue entries, game sessions, scores, votes, and unsaved result retries. Saved account results, replays, and privacy preferences remain in PostgreSQL. This is an in-memory multi-room deployment with persistent completed account history. If multi-process deployment becomes necessary, game authority must move to transaction-safe storage rather than relying on this singleton.
 
 ## Streaming, timing, and disconnects
 
 - The browser first obtains a server-issued, signed HTTP-only session cookie. Only the server verifies this credential; a public session UUID never authorizes actions. HTTP and EventSource send the same cookie. Nicknames are not credentials.
-- `splitLink` uses `httpSubscriptionLink` for SSE and preserves `httpBatchStreamLink` for ordinary requests. Session bootstrap and operator login/logout use `httpLink`: those responses must finish setting cookies before headers are sent. SuperJSON and existing Better Auth configuration are preserved.
+- `splitLink` uses `httpSubscriptionLink` for SSE and preserves `httpBatchStreamLink` for ordinary requests. Session bootstrap uses `httpLink`: those responses must finish setting cookies before headers are sent. Account login/logout uses the existing Better Auth HTTP route. SuperJSON and existing Better Auth configuration are preserved.
 - Each subscription attaches its listener before reading the initial snapshot. Reconnection sends the latest full state. Slow consumers coalesce pending updates. The browser ignores older revisions. Covered cells carry only `{ kind: "covered" }`, including at results; hidden bomb positions are never serialized.
 - SSE pings every three seconds; the client reconnects after seven seconds without stream activity. Responses disable caching/transformation and request unbuffered proxy delivery (`X-Accel-Buffering: no`). A reverse proxy must support streaming and must not buffer SSE responses.
 - Server timestamps and deadlines drive the displayed countdown. A five-second HTTP heartbeat measures clock offset using the request midpoint; the countdown itself is local display work and does not broadcast ticks. The server is authoritative even if a client clock or network delay is inaccurate.
@@ -240,7 +263,7 @@ pnpm test:integration  # real HTTP + SSE against the already-running, empty lobb
 GAME_TEST_DATABASE=1 pnpm exec tsx --env-file=.env --test tests/history.test.ts
 ```
 
-The integration check also verifies separate messaging routes, global message fanout/history, posting limits, and that messaging streams cannot keep room seats connected. It posts a labeled test message to the temporary board. The integration check reads the operator password from `.env` (or the environment). It refuses existing rooms or queue entries, then creates two guest rooms and verifies HTTP/SSE isolation, autonomous timers, reconnects, duplicate tabs, operator reset/start, and lease-expiry forfeits. It starts no server and cleans up only its own seats/streams. Use `GAME_TEST_ORIGIN` to target another configured host. After upgrading a retained development service, its owner must restart it before this check can run.
+The integration check also verifies separate messaging routes, global message fanout/history, posting limits, and that messaging streams cannot keep room seats connected. It posts a labeled test message to the temporary board. The integration check signs in using `GAME_TEST_ADMIN_EMAIL` and `GAME_TEST_ADMIN_PASSWORD` from the environment, `.env`, or the private `.env.operator.local` file. It requires an existing administrator and never creates or promotes accounts. It refuses existing rooms or queue entries, then creates two guest rooms and verifies HTTP/SSE isolation, autonomous timers, reconnects, duplicate tabs, operator reset/start, and lease-expiry forfeits. It starts no server and cleans up only its own seats/streams. Use `GAME_TEST_ORIGIN` to target another configured host. After upgrading a retained development service, its owner must restart it before this check can run.
 
 The opt-in PostgreSQL test uses temporary tables inside a rolled-back transaction. It verifies the new migration, idempotent result/replay storage, private defaults, both-player public consent, direct replay authorization, and pagination without modifying account data or persistent game tables. Ordinary `pnpm check` runs deterministic game, room, replay, session, and migration-helper tests without requiring a database connection.
 

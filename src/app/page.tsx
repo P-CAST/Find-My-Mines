@@ -1,11 +1,18 @@
 "use client";
 
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api } from "~/trpc/react";
 import { authClient } from "~/server/better-auth/client";
 
 export default function Home() {
   const [mode, setMode] = useState<"guest" | "login">("guest");
+  useEffect(() => {
+    if (
+      new URLSearchParams(window.location.search).get("returnTo") ===
+      "/operator"
+    )
+      setMode("login");
+  }, []);
   const [registering, setRegistering] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
@@ -25,7 +32,8 @@ export default function Home() {
   const saveGuestName = api.game.setGuestName.useMutation();
   const destination = () => {
     const target = new URLSearchParams(window.location.search).get("returnTo");
-    return target && /^\/game(?:\/[a-f0-9-]{36})?$/.test(target)
+    return target &&
+      (target === "/operator" || /^\/game(?:\/[a-f0-9-]{36})?$/.test(target))
       ? target
       : "/game";
   };

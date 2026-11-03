@@ -1,5 +1,6 @@
 import { networkInterfaces } from "node:os";
 import { betterAuth } from "better-auth";
+import { admin } from "better-auth/plugins";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 
 import { env } from "~/env";
@@ -27,6 +28,7 @@ export const auth = betterAuth({
   database: drizzleAdapter(db, {
     provider: "pg",
   }),
+  plugins: [admin({ defaultRole: "user", adminRoles: ["admin"] })],
   emailAndPassword: {
     enabled: true,
   },
