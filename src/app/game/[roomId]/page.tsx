@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "~/trpc/react";
 import {
   ConnectionStatus,
@@ -48,6 +48,18 @@ export default function RoomPage() {
     onSuccess: () => router.push("/game"),
   });
   const me = state?.players.find((p) => p.id === state.viewerId && p.seated);
+  const utils = api.useUtils();
+  const savedMatchId =
+    state?.saveStatus === "saved" && me?.account ? state.matchId : null;
+  const matchRating = api.game.matchRating.useQuery(
+    { matchId: savedMatchId ?? "" },
+    { enabled: !!savedMatchId, retry: false },
+  );
+  useEffect(() => {
+    if (!savedMatchId) return;
+    void utils.game.rating.invalidate();
+    void utils.game.leaderboard.invalidate();
+  }, [savedMatchId, utils]);
   const active = state?.players.find((p) => p.id === state.activePlayer);
   const connected = connection === "connected";
   const canReveal =
@@ -185,8 +197,8 @@ export default function RoomPage() {
                   : state.players.some((p) => !p.account)
                     ? "Guest game · no result or replay will be saved."
                     : state.phase === "lobby"
-                      ? "Two account players save a result and replay. A guest opponent makes this game unrecorded."
-                      : "Account game · result and replay are recorded."}
+                      ? "Two-account games affect Elo and publicly list account names and ratings. A guest opponent makes this game unrated."
+                      : "Rated account game · account names and ratings are public; result and replay privacy still applies."}
               </p>
               {state.phase === "active" && (
                 <>
@@ -216,12 +228,33 @@ export default function RoomPage() {
                     {state.resultReason === "forfeit" ? " · Forfeit" : ""}
                   </h2>
                   {state.saveStatus === "pending" && (
-                    <p>Saving result and replay…</p>
+                    <p>Saving result, replay, and rating…</p>
                   )}
                   {state.saveStatus === "failed" && (
                     <p className="text-warning">
-                      Result and replay have not been saved. The server is
-                      retrying.
+                      Result, replay, and rating have not been saved. The server
+                      is retrying.
+                    </p>
+                  )}
+                  {savedMatchId && matchRating.isPending && (
+                    <p>Loading rating change…</p>
+                  )}
+                  {savedMatchId && matchRating.error && (
+                    <p role="alert">
+                      Unable to load rating change.{" "}
+                      <button
+                        className="btn btn-sm"
+                        onClick={() => void matchRating.refetch()}
+                      >
+                        Retry
+                      </button>
+                    </p>
+                  )}
+                  {savedMatchId && matchRating.data && (
+                    <p>
+                      {matchRating.data.before} → {matchRating.data.after} Elo (
+                      {matchRating.data.delta >= 0 ? "+" : ""}
+                      {matchRating.data.delta})
                     </p>
                   )}
                   {state.saveStatus === "saved" && (

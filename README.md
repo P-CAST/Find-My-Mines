@@ -61,7 +61,8 @@ display a fallback notice. Disconnecting cancels pending work; timers and normal
 reconnect grace continue. The bot room closes when its human leaves or their
 reservation expires.
 
-This change updates the retained game authority to runtime version 3. After
+The bot update introduced retained game authority runtime version 3; the friends
+update below requires version 4. After
 existing games end, the server owner must deliberately restart the application
 to load the new fields and environment setting. Development reloads never replace
 the old authority automatically. Automated bot tests mock OpenAI; verify the
@@ -96,6 +97,55 @@ Generation sends anonymized public replay events to OpenAI with `store: false`; 
 Requests use the existing HTTP route, separate from live-game transitions. Limits are two concurrent requests across the process and five new attempts per account per hour, including failed attempts; cached reads and deduplicated requests do not consume additional attempts. Requests time out after 60 seconds, output is capped at 8,000 tokens, and evidence exceeding 64 KiB is rejected without truncation. Failures can be retried manually. In-memory concurrency and rate limits survive development reloads but reset on process restart; completed reports persist in PostgreSQL. Logs contain duration, token usage, cache hits, and sanitized error categories, never provider payloads or keys.
 
 `pnpm check` tests provider behavior using mocks and incurs no OpenAI charges. The opt-in PostgreSQL history test also checks report persistence, uniqueness, permissions, and cascading deletion using rolled-back temporary tables. A real provider smoke test requires the two settings above and one explicit Analyze game action on a participant's replay.
+
+## Friends and invitations
+
+Signed-in accounts can open **Friends** from navigation. Search all account names (at least two characters), send requests, and accept,
+decline, cancel, or remove connections. A short public profile ID distinguishes
+players with duplicate names. Emails, credentials, and private histories are never
+included in search. Friends and requests are private to the participants;
+friendship does not change either player's history/replay privacy settings.
+
+Accepted friends see online/offline status while the other account has any active
+signed-in app tab. Social connections have independent 15-second leases renewed
+every five seconds and aggregate across tabs and devices. They never keep a game
+seat connected. Losing the last connection, session expiry, or logout removes
+social presence after stream cleanup/lease expiry. Persisted sessions are checked
+again every ten seconds on long-lived streams.
+
+Use **Invite to game** for an online friend. Both accounts must be out of rooms and
+matchmaking. One pending invitation may involve each account; it expires after
+60 seconds. Accepting automatically opens an unlisted room in both players'
+connected tabs, reserves both seats for 15 seconds, and starts only when both
+connect to that room. A visitor with the link can watch but cannot take a reserved
+seat, even after its owner fails to arrive. Normal timers, forfeits, rematches,
+and account-game recording apply. Entering another game or queue, removing the
+friendship, declining, or canceling invalidates pending invitations.
+
+Limits are 30 searches, ten new friend requests, and five new game invitations
+per account per rolling minute. Declining/canceling a request or invitation, or
+removing a friend, adds a 60-second cooldown before that pair can retry the same
+kind of request. Blocking, direct messages, and email/push notifications are not
+included.
+
+Deploy by applying `pnpm db:migrate` before using the updated application. Migration
+`0002_stormy_spitfire.sql` adds the friendship table and creates public profile IDs
+for existing accounts without changing history consent. No new environment values
+are needed. After existing games and pending saves finish, the server owner must
+**deliberately restart the application** to load authority runtime version 4.
+Development reloads do not replace the old authority. Friendships and requests
+persist; live rooms, social presence, invitations, and rate limits reset on restart.
+
+Verify with `pnpm check` and the opt-in rolled-back PostgreSQL checks:
+
+```sh
+GAME_TEST_DATABASE=1 pnpm exec tsx --env-file=.env --test tests/friends.test.ts
+```
+
+For a manual check, use two accounts in separate browser sessions. Search a name,
+accept a request, verify presence across multiple tabs, send an invitation, and
+confirm both accounts navigate into the same game. Verify an unrelated account can
+only spectate and that viewing Friends cannot prevent a disconnected room forfeit.
 
 ## Global message board
 
@@ -207,3 +257,80 @@ Demo checklist:
 **Assignment wording:** this implementation deliberately uses HTTP mutations plus SSE subscriptions. Confirm with the instructor that this meets the assignment's “socket programming” requirement. SSE is an HTTP streaming mechanism; this project does not demonstrate raw TCP/UDP socket programming.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md) for project conventions. The subscription transport follows [tRPC's subscription documentation](https://trpc.io/docs/server/subscriptions).
+
+## Achievements
+
+Open `/game/achievements` from navigation or My history to collect 15 permanent
+badges. Eight badges work in bot and human games, four require human opponents,
+and three require bot games. Cards show each condition, progress, and unlock date.
+There are no achievement points or gameplay rewards.
+
+Only games started with the achievement update count; existing history is not
+backfilled. Players must be signed in at match start. Human games require two
+accounts; signed-in bot games also count. Guest/mixed games, forfeits, operator
+cancellations, and abandoned games award no badges or progress. A combo lasts
+until an empty cell or server timeout ends the turn. All progress, including
+individual mine finds and combos, is credited only after normal completion and
+successful database persistence. Reopen the collection or focus its tab to refresh.
+
+Badge sharing is off by default. **Allow public badge collection** shares earned
+badges and dates at `/players/<publicId>`, independently of history consent. It
+never shares locked progress, source matches, or opponents. Results and replays
+still require both participants' public-history consent. Revoking badge sharing
+applies to subsequent requests; previously viewed data cannot be retracted.
+
+Bot achievement storage contains only the signed-in player's completion summary;
+bot results, replays, and analysis remain unsaved. Completion writes are atomic
+with human results and idempotent per account/match. Failed writes retry every five
+seconds after room disposal, and operator pending/failed totals include achievement
+writes. Pending completions remain in memory and can be lost on process failure;
+saved badges survive restarts and opponent deletion.
+
+Deploy migration `0003_soft_psynapse.sql` with `pnpm db:migrate` (or the existing VPS
+migration helper) before deploying the updated app. No new `.env` settings are
+needed. After active games and pending saves finish, the owner must deliberately
+restart the application to load game authority runtime version **5**. Development
+reloads retain older authorities and require that restart; do not restart an active
+server automatically. This release starts achievement tracking from fresh matches.
+
+Verification: `pnpm check`, plus rolled-back PostgreSQL checks with no live data
+changes:
+
+```sh
+GAME_TEST_DATABASE=1 pnpm exec tsx --env-file=.env --test tests/achievements.test.ts tests/history.test.ts tests/friends.test.ts
+```
+
+## Elo leaderboard
+
+`/game/leaderboard` publicly lists account names, Elo, rank, games, wins, and losses
+once an account has one rated game. All new two-account results count, including
+friend games, rematches, and forfeits. Bot practice, guest/mixed games, and
+operator-aborted games are unrated. Public ratings do not grant history, replay,
+or achievement access; those privacy settings remain independent.
+
+Everyone starts at 1000. K=32 and the 400-point expected-score formula determine a
+single rounded transfer from loser to winner (16 points at equal ratings). Score
+margin has no effect. There are no seasons, rating floors, placement multipliers,
+or decay. Equal ratings share competition ranks (1, 1, 3); public profile IDs
+provide stable ordering within ties. Repeated opponents count normally and
+matchmaking is unchanged.
+
+Ratings, result/replay records, and achievements commit atomically. Duplicate
+match IDs cannot award points twice. Concurrent completions use locked profile
+ratings in transaction order; delayed retries use the latest committed ratings.
+Pending/failed saves have not awarded rating points. Unsaved retries are lost on
+restart, just like existing unsaved results. Deleting an account removes its
+listing without reversing opponents' ratings.
+
+Apply migration `0004_white_tomas.sql` after the preceding migrations. Existing
+results retain null rating snapshots and are never backfilled. Before activating
+this release, drain games and pending saves, apply migrations with `pnpm db:migrate`
+(or `pnpm db:migrate:vps` for the VPS), then have the owner restart the application.
+No new environment variables are needed and the authority runtime remains version
+5. Do not restart the user's development server automatically.
+
+Run `pnpm check`, then verify persistence using rollback-only temporary tables:
+
+```sh
+GAME_TEST_DATABASE=1 pnpm exec tsx --env-file=.env --test tests/history.test.ts tests/achievements.test.ts tests/friends.test.ts
+```

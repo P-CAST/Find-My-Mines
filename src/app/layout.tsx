@@ -3,10 +3,11 @@
 import "~/styles/globals.css";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Geist } from "next/font/google";
 
+import { api } from "~/trpc/react";
 import { TRPCReactProvider } from "~/trpc/react";
 import { authClient } from "~/server/better-auth/client";
 
@@ -133,6 +134,7 @@ export default function RootLayout({
                 </Link>
                 <div className="flex-1" />
               </header>
+              {session && <SocialConnection key={session.user.id} />}
               {children}
             </div>
             <div
@@ -205,6 +207,9 @@ export default function RootLayout({
                   {[
                     { href: "/", label: "Home" },
                     { href: "/game", label: "Play" },
+                    { href: "/game/leaderboard", label: "Leaderboard" },
+                    { href: "/friends", label: "Friends" },
+                    { href: "/game/achievements", label: "Achievements" },
                     { href: "/game/history", label: "History & replays" },
                     { href: "/operator", label: "Operator" },
                   ].map(({ href, label }) => (
@@ -273,5 +278,148 @@ export default function RootLayout({
         </TRPCReactProvider>
       </body>
     </html>
+  );
+}
+
+function SocialConnection() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const utils = api.useUtils();
+  const [error, setError] = useState("");
+  const latest = useRef<{ instanceId: string; revision: number } | null>(null);
+  const handled = useRef(new Set<string>());
+  const invitations = api.game.invitations.useQuery(undefined, {
+    retry: false,
+  });
+  const stream = api.friends.onUpdate.useSubscription(undefined, {
+    onData(data) {
+      if (
+        latest.current?.instanceId === data.instanceId &&
+        data.revision < latest.current.revision
+      )
+        return;
+      latest.current = data;
+      setError("");
+      void utils.friends.invalidate();
+      void utils.game.invitations.invalidate();
+    },
+    onError(cause) {
+      setError(cause.message);
+    },
+  });
+  const reset = stream.reset;
+  useEffect(() => {
+    if (stream.status !== "idle" || error) return;
+    const timer = setTimeout(reset, 1000);
+    return () => clearTimeout(timer);
+  }, [stream.status, reset, error]);
+  useEffect(() => {
+    if (stream.status !== "pending") return;
+    let cancelled = false;
+    const beat = () => {
+      void utils.client.friends.heartbeat.mutate().catch((cause: unknown) => {
+        if (!cancelled) {
+          setError(
+            cause instanceof Error ? cause.message : "Social connection lost.",
+          );
+          reset();
+        }
+      });
+    };
+    beat();
+    const timer = setInterval(beat, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [stream.status, utils.client, reset]);
+  useEffect(() => {
+    const reconnect = () => {
+      setError("");
+      reset();
+    };
+    window.addEventListener("online", reconnect);
+    return () => window.removeEventListener("online", reconnect);
+  }, [reset]);
+  useEffect(() => {
+    const accepted = invitations.data?.find((i) => i.roomId);
+    if (!accepted?.roomId || handled.current.has(accepted.id)) return;
+    handled.current.add(accepted.id);
+    if (pathname !== `/game/${accepted.roomId}`)
+      router.push(`/game/${accepted.roomId}`);
+  }, [invitations.data, pathname, router]);
+  const respond = api.game.respondInvitation.useMutation({
+    retry: false,
+    onSuccess() {
+      void utils.game.invitations.invalidate();
+    },
+  });
+  const pending = invitations.data?.find((i) => !i.roomId);
+  const failure =
+    error || (invitations.error?.message ?? respond.error?.message);
+  if (!pending && !failure) return null;
+  return (
+    <aside
+      aria-label="Friends and invitations"
+      className="bg-base-100 border-base-300 flex flex-wrap items-center gap-3 border-b px-4 py-2 text-sm"
+    >
+      {pending && (
+        <div role="status" className="flex flex-wrap items-center gap-2">
+          <span>
+            {pending.incoming
+              ? `${pending.other.name} invited you to play.`
+              : `Waiting for ${pending.other.name} to accept…`}
+          </span>
+          <span>
+            This game affects Elo. Account names and ratings are public.
+          </span>
+          {pending.incoming && (
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={respond.isPending}
+              onClick={() =>
+                respond.mutate({ id: pending.id, action: "accept" })
+              }
+            >
+              Accept and play
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={respond.isPending}
+            onClick={() =>
+              respond.mutate({
+                id: pending.id,
+                action: pending.incoming ? "decline" : "cancel",
+              })
+            }
+          >
+            {pending.incoming ? "Decline" : "Cancel"}
+          </button>
+        </div>
+      )}
+      {failure && (
+        <div
+          role="alert"
+          className="text-error flex flex-wrap items-center gap-2"
+        >
+          <span>{failure}</span>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => {
+              setError("");
+              reset();
+              void utils.friends.invalidate();
+              void utils.game.invitations.invalidate();
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+    </aside>
   );
 }

@@ -51,15 +51,25 @@ export function TRPCReactProvider(props: { children: React.ReactNode }) {
   const { data: account, isPending: accountPending } = authClient.useSession();
   const previousAccount = useRef<string | null | undefined>(undefined);
   const accountId = account?.user.id ?? null;
+  const [readyAccount, setReadyAccount] = useState<string | null>();
   useEffect(() => {
     if (accountPending) return;
+    let cancelled = false;
     const previous = previousAccount.current;
     previousAccount.current = accountId;
-    if (previous !== undefined && previous !== accountId) {
-      // Other tabs can change auth cookies without navigating this page.
-      // Clear participant-only history/replays before fetching as the new viewer.
-      void queryClient.resetQueries();
-    }
+    const prepare = async () => {
+      if (previous !== undefined && previous !== accountId) {
+        // Unmount account consumers before canceling/resetting their cached data.
+        // In particular, an old accepted invitation must never navigate a new user.
+        await queryClient.cancelQueries();
+        await queryClient.resetQueries();
+      }
+      if (!cancelled) setReadyAccount(accountId);
+    };
+    void prepare();
+    return () => {
+      cancelled = true;
+    };
   }, [accountPending, accountId, queryClient]);
 
   const [trpcClient] = useState(() =>
@@ -121,7 +131,11 @@ export function TRPCReactProvider(props: { children: React.ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
       <api.Provider client={trpcClient} queryClient={queryClient}>
-        {props.children}
+        {accountPending || readyAccount === accountId ? (
+          props.children
+        ) : (
+          <p role="status">Updating account…</p>
+        )}
       </api.Provider>
     </QueryClientProvider>
   );

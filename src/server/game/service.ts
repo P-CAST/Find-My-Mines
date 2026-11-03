@@ -116,6 +116,30 @@ export type MatchRecord = {
   reason: "completed" | "forfeit";
   replay: { version: 1; frames: ReplayFrame[] };
 };
+export type AchievementSummary = {
+  userId: string;
+  matchId: string;
+  mode: "human" | "bot";
+  startedAt: Date;
+  finishedAt: Date;
+  won: boolean;
+  score: number;
+  maxCombo: number;
+  timeouts: number;
+  maxDeficit: number;
+};
+export type MatchCompletion = {
+  matchId: string;
+  result?: MatchRecord;
+  summaries: AchievementSummary[];
+};
+type AchievementTracking = {
+  userId: string;
+  combo: number;
+  maxCombo: number;
+  timeouts: number;
+  maxDeficit: number;
+};
 type Timer = ReturnType<typeof setTimeout>;
 type Player = {
   bot?: true;
@@ -132,7 +156,17 @@ type BotJob = {
   controller: AbortController;
   timer?: Timer;
 };
+export type InvitePerson = { userId: string; publicId: string; name: string };
+type FriendInvitation = {
+  id: string;
+  from: InvitePerson;
+  to: InvitePerson;
+  expiresAt: number;
+  roomId: string | null;
+  timer?: Timer;
+};
 type Room = {
+  reservedAccounts?: string[];
   mode: "human" | "bot";
   botJob?: BotJob;
   botAttempts: Set<string>;
@@ -156,6 +190,7 @@ type Room = {
   saveStatus: SaveStatus;
   startedAt: number;
   frames: ReplayFrame[];
+  achievements: Map<string, AchievementTracking>;
   timer?: Timer;
 };
 type Presence = {
@@ -180,6 +215,7 @@ export type ServiceOptions = {
   firstPlayer?: () => number;
   log?: (message: string) => void;
   saveResult?: (record: MatchRecord) => Promise<void>;
+  saveCompletion?: (completion: MatchCompletion) => Promise<void>;
   botProvider?: BotProvider;
   randomIndex?: (length: number) => number;
 };
@@ -190,7 +226,7 @@ const covered = (): PublicCell[] =>
 
 /** One process-wide, synchronous authority. Database writes run after transitions. */
 export class GameService {
-  readonly runtimeVersion = 3;
+  readonly runtimeVersion = 5;
   readonly instanceId = randomUUID();
   private revision = 0;
   private rooms = new Map<string, Room>();
@@ -200,8 +236,14 @@ export class GameService {
   private listeners = new Map<string, Set<() => void>>();
   private pending = new Map<
     string,
-    { record: MatchRecord; failed: boolean; saving: boolean; timer?: Timer }
+    {
+      completion: MatchCompletion;
+      failed: boolean;
+      saving: boolean;
+      timer?: Timer;
+    }
   >();
+  private invitations = new Map<string, FriendInvitation>();
   private queueTimer?: Timer;
   private botQuotaTimer?: Timer;
   private botGames: number[] = [];
@@ -217,6 +259,7 @@ export class GameService {
   private readonly firstPlayer;
   private readonly log;
   private writer?: ServiceOptions["saveResult"];
+  private completionWriter?: ServiceOptions["saveCompletion"];
   constructor(options: ServiceOptions = {}) {
     this.now = options.now ?? Date.now;
     this.schedule =
@@ -231,12 +274,16 @@ export class GameService {
     this.firstPlayer = options.firstPlayer ?? (() => randomInt(2));
     this.log = options.log ?? console.log;
     this.writer = options.saveResult;
+    this.completionWriter = options.saveCompletion;
     this.botProvider = options.botProvider;
     this.randomIndex =
       options.randomIndex ?? ((length: number) => randomInt(length));
   }
   setResultWriter(writer: NonNullable<ServiceOptions["saveResult"]>) {
     this.writer = writer;
+  }
+  setCompletionWriter(writer: NonNullable<ServiceOptions["saveCompletion"]>) {
+    this.completionWriter = writer;
   }
   setBotProvider(provider: BotProvider | undefined) {
     this.botProvider = provider;
@@ -315,6 +362,7 @@ export class GameService {
   }
   private publish(room?: Room) {
     this.revision++;
+    this.pruneInvitations();
     if (room) {
       this.syncBot(room);
       room.revision = this.revision;
@@ -620,6 +668,8 @@ export class GameService {
           r.deadline !== null &&
           r.deadline <= this.now()
         ) {
+          const tracking = r.achievements.get(r.activePlayer!);
+          if (tracking) tracking.timeouts++;
           this.newTurn(r, this.opponent(r, r.activePlayer!).id);
           this.frame(r, "timeout");
           this.publish(r);
@@ -656,6 +706,7 @@ export class GameService {
       saveStatus: "unrecorded",
       startedAt: 0,
       frames: [],
+      achievements: new Map(),
     };
     this.rooms.set(r.id, r);
     return r;
@@ -677,6 +728,153 @@ export class GameService {
     });
     this.membership.set(key, r.id);
     this.arm(r);
+  }
+  private publishInvitations(...users: string[]) {
+    for (const userId of new Set(users))
+      for (const listener of this.listeners.get(`social:${userId}`) ?? [])
+        listener();
+  }
+  accountFree(userId: string) {
+    this.checkTime();
+    return (
+      !this.membership.has(`account:${userId}`) &&
+      !this.queue.has(`account:${userId}`)
+    );
+  }
+  private pruneInvitations() {
+    const changed = new Set<string>();
+    for (const [id, invitation] of this.invitations) {
+      const { from, to, roomId } = invitation;
+      const remove = roomId
+        ? ![from, to].some(
+            (p) => this.membership.get(`account:${p.userId}`) === roomId,
+          )
+        : invitation.expiresAt <= this.now() ||
+          [from, to].some(
+            (p) =>
+              this.membership.has(`account:${p.userId}`) ||
+              this.queue.has(`account:${p.userId}`),
+          );
+      if (remove) {
+        this.cancelTimer(invitation.timer);
+        this.invitations.delete(id);
+        changed.add(from.userId);
+        changed.add(to.userId);
+      }
+    }
+    this.publishInvitations(...changed);
+  }
+  invitationsFor(userId: string) {
+    this.pruneInvitations();
+    return [...this.invitations.values()]
+      .filter(
+        (i) =>
+          (i.from.userId === userId || i.to.userId === userId) &&
+          (!i.roomId || this.membership.get(`account:${userId}`) === i.roomId),
+      )
+      .map((i) => ({
+        id: i.id,
+        incoming: i.to.userId === userId,
+        expiresAt: i.expiresAt,
+        roomId: i.roomId,
+        other: {
+          name: i.from.userId === userId ? i.to.name : i.from.name,
+          publicId: i.from.userId === userId ? i.to.publicId : i.from.publicId,
+        },
+      }));
+  }
+  invitationPair(userId: string, id: string) {
+    const i = this.invitations.get(id);
+    if (!i || (i.from.userId !== userId && i.to.userId !== userId))
+      this.fail("Invitation unavailable.", "NOT_FOUND");
+    return { from: i.from.userId, to: i.to.userId };
+  }
+  inviteFriend(from: InvitePerson, to: InvitePerson) {
+    if (from.userId === to.userId) this.fail("Choose another player.");
+    if (!this.accountFree(from.userId) || !this.accountFree(to.userId))
+      this.fail("Both players must leave their room or queue first.");
+    this.pruneInvitations();
+    for (const i of this.invitations.values()) {
+      if (
+        !i.roomId &&
+        [i.from.userId, i.to.userId].some(
+          (id) => id === from.userId || id === to.userId,
+        )
+      ) {
+        if (i.from.userId === from.userId && i.to.userId === to.userId)
+          return { id: i.id };
+        this.fail("One of these players already has a pending invitation.");
+      }
+    }
+    const i: FriendInvitation = {
+      id: randomUUID(),
+      from,
+      to,
+      expiresAt: this.now() + 60_000,
+      roomId: null,
+    };
+    i.timer = this.schedule(() => {
+      this.pruneInvitations();
+    }, 60_000);
+    this.invitations.set(i.id, i);
+    this.publishInvitations(i.from.userId, i.to.userId);
+    return { id: i.id };
+  }
+  acceptFriendInvitation(userId: string, id: string) {
+    this.checkTime();
+    this.pruneInvitations();
+    const i = this.invitations.get(id);
+    if (i?.to.userId !== userId)
+      this.fail("Invitation unavailable.", "NOT_FOUND");
+    if (i.roomId) {
+      if (this.membership.get(`account:${userId}`) !== i.roomId)
+        this.fail("Invitation unavailable.", "NOT_FOUND");
+      return { roomId: i.roomId };
+    }
+    if (!this.accountFree(i.from.userId) || !this.accountFree(i.to.userId))
+      this.fail("Both players must be free to accept.");
+    const safeName = (name: string) =>
+      name
+        .replace(/[\p{C}]/gu, "")
+        .trim()
+        .slice(0, 24) || "Player";
+    const r = this.newRoom("unlisted");
+    r.reservedAccounts = [i.from.userId, i.to.userId];
+    i.roomId = r.id;
+    this.cancelTimer(i.timer);
+    for (const p of [i.from, i.to])
+      this.addPlayer(r, `account:${p.userId}`, p.userId, safeName(p.name));
+    this.publish(r);
+    this.publishInvitations(i.from.userId, i.to.userId);
+    return { roomId: r.id };
+  }
+  dismissFriendInvitation(
+    userId: string,
+    id: string,
+    action: "decline" | "cancel",
+  ) {
+    const i = this.invitations.get(id);
+    if (!i) return;
+    if (
+      i.roomId ||
+      (action === "decline" ? i.to.userId !== userId : i.from.userId !== userId)
+    )
+      this.fail("Invitation unavailable.", "FORBIDDEN");
+    this.cancelTimer(i.timer);
+    this.invitations.delete(id);
+    this.publishInvitations(i.from.userId, i.to.userId);
+  }
+  cancelFriendInvitations(a: string, b: string) {
+    for (const i of [...this.invitations.values()])
+      if (
+        !i.roomId &&
+        [i.from.userId, i.to.userId].includes(a) &&
+        [i.from.userId, i.to.userId].includes(b)
+      ) {
+        this.cancelTimer(i.timer);
+        this.invitations.delete(i.id);
+      }
+    this.publishInvitations(a, b);
   }
   create(actor: Actor, nickname: string, visibility: Visibility) {
     this.checkTime();
@@ -731,6 +929,11 @@ export class GameService {
     if (existing === roomId) return this.snapshot(roomId, actor);
     if (existing || this.queue.has(key))
       this.fail("Leave your current room or queue before joining another.");
+    if (r.reservedAccounts && !r.reservedAccounts.includes(actor.userId ?? ""))
+      this.fail(
+        "These seats are reserved for the invited accounts.",
+        "FORBIDDEN",
+      );
     if (r.mode === "bot" || r.phase !== "lobby" || r.players.length >= 2)
       this.fail(
         "Game full. Both player seats are occupied or this match has ended.",
@@ -856,10 +1059,23 @@ export class GameService {
     r.saveStatus = r.players.every((p) => p.userId)
       ? "recording"
       : "unrecorded";
+    r.achievements.clear();
+    if (r.mode === "bot" || r.players.every((p) => p.userId)) {
+      for (const p of r.players)
+        if (p.userId)
+          r.achievements.set(p.id, {
+            userId: p.userId,
+            combo: 0,
+            maxCombo: 0,
+            timeouts: 0,
+            maxDeficit: 0,
+          });
+    }
     this.newTurn(r, first ?? r.players[this.firstPlayer()]!.id);
     this.frame(r, "start");
   }
   private newTurn(r: Room, id: string) {
+    for (const tracking of r.achievements.values()) tracking.combo = 0;
     r.activePlayer = id;
     r.turnId = randomUUID();
     r.deadline = this.now() + TURN_MS;
@@ -910,6 +1126,17 @@ export class GameService {
     if (r.bombs.has(index)) {
       r.cells[index] = { kind: "bomb" };
       p.score++;
+      const tracking = r.achievements.get(p.id);
+      if (tracking)
+        tracking.maxCombo = Math.max(tracking.maxCombo, ++tracking.combo);
+      for (const player of r.players) {
+        const stats = r.achievements.get(player.id);
+        if (stats)
+          stats.maxDeficit = Math.max(
+            stats.maxDeficit,
+            this.opponent(r, player.id).score - player.score,
+          );
+      }
       if (
         r.players.reduce((sum, player) => sum + player.score, 0) === BOMB_COUNT
       ) {
@@ -1076,9 +1303,10 @@ export class GameService {
         : "All 11 bombs found.";
     this.frame(r, reason === "forfeit" ? "forfeit" : "reveal", cellIndex);
     this.arm(r);
+    let result: MatchRecord | undefined;
     if (r.saveStatus === "recording") {
       const [a, b] = r.players as [Player, Player];
-      const record: MatchRecord = {
+      result = {
         matchId: r.matchId,
         playerOneId: a.userId!,
         playerTwoId: b.userId!,
@@ -1094,13 +1322,38 @@ export class GameService {
       };
       r.frames = [];
       r.saveStatus = "pending";
-      this.pending.set(record.matchId, {
-        record,
+    }
+    const summaries: AchievementSummary[] =
+      reason === "completed"
+        ? r.players.flatMap((p) => {
+            const tracking = r.achievements.get(p.id);
+            return tracking
+              ? [
+                  {
+                    userId: tracking.userId,
+                    matchId: r.matchId,
+                    mode: r.mode,
+                    startedAt: new Date(r.startedAt),
+                    finishedAt: new Date(this.now()),
+                    won: p.id === winner,
+                    score: p.score,
+                    maxCombo: tracking.maxCombo,
+                    timeouts: tracking.timeouts,
+                    maxDeficit: tracking.maxDeficit,
+                  },
+                ]
+              : [];
+          })
+        : [];
+    if (result || summaries.length) {
+      this.pending.set(r.matchId, {
+        completion: { matchId: r.matchId, result, summaries },
         failed: false,
         saving: false,
       });
       // A microtask starts I/O only after the complete synchronous transition.
-      void Promise.resolve().then(() => this.save(record.matchId));
+      const matchId = r.matchId;
+      void Promise.resolve().then(() => this.save(matchId));
     }
   }
   private async save(matchId: string) {
@@ -1108,8 +1361,11 @@ export class GameService {
     if (!entry || entry.saving || this.disposed) return;
     entry.saving = true;
     try {
-      if (!this.writer) throw new Error("Result storage is not configured.");
-      await this.writer(structuredClone(entry.record));
+      if (this.completionWriter)
+        await this.completionWriter(structuredClone(entry.completion));
+      else if (this.writer && entry.completion.result)
+        await this.writer(structuredClone(entry.completion.result));
+      else throw new Error("Completion storage is not configured.");
       if (this.disposed) return;
       this.pending.delete(matchId);
       this.updateSaveStatus(matchId, "saved");
@@ -1118,7 +1374,7 @@ export class GameService {
       entry.failed = true;
       entry.saving = false;
       this.log(
-        `[game history] save failed for match ${matchId}; retrying in 5 seconds`,
+        `[game completion] save failed for match ${matchId}; retrying in 5 seconds`,
       );
       this.updateSaveStatus(matchId, "failed");
       entry.timer = this.schedule(() => {
@@ -1128,7 +1384,7 @@ export class GameService {
   }
   private updateSaveStatus(matchId: string, status: SaveStatus) {
     const r = [...this.rooms.values()].find((r) => r.matchId === matchId);
-    if (r) r.saveStatus = status;
+    if (r?.mode === "human") r.saveStatus = status;
     this.publish(r);
   }
   rematch(actor: Actor, roomId: string, matchId: string) {
@@ -1171,6 +1427,7 @@ export class GameService {
     }
     p.reservedUntil = null;
     if (this.membership.get(p.key) === r.id) this.membership.delete(p.key);
+    if (r.reservedAccounts) this.publishInvitations(...r.reservedAccounts);
     if (r.phase === "lobby") r.players = r.players.filter((p) => p.seated);
     if (!r.players.some((p) => p.seated)) {
       this.cancelTimer(r.timer);
@@ -1212,6 +1469,7 @@ export class GameService {
     r.votes.clear();
     r.resultReason = null;
     r.frames = [];
+    r.achievements.clear();
     r.saveStatus = "unrecorded";
     r.manualStart = manualStart;
     r.message = message;
@@ -1252,6 +1510,8 @@ export class GameService {
   dispose() {
     this.disposed = true;
     this.cancelTimer(this.queueTimer);
+    for (const i of this.invitations.values()) this.cancelTimer(i.timer);
+    this.invitations.clear();
     this.cancelTimer(this.botQuotaTimer);
     for (const r of this.rooms.values()) {
       this.cancelBot(r);
@@ -1277,10 +1537,10 @@ const globalGame = globalThis as typeof globalThis & {
 };
 const game = (globalGame.findMyMinesGame ??= new GameService());
 // Never change the prototype of an older authority: its live callbacks must keep working.
-if (game.runtimeVersion === 3)
+if (game.runtimeVersion === 5)
   Object.setPrototypeOf(game, GameService.prototype);
 export function getGame() {
-  if (game.runtimeVersion !== 3)
+  if (game.runtimeVersion !== 5)
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
       message:

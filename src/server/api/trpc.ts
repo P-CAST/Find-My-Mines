@@ -103,7 +103,8 @@ const timingMiddleware = t.middleware(async ({ next, path }) => {
   if (
     t._config.isDev &&
     !path.startsWith("game.") &&
-    !path.startsWith("messages.")
+    !path.startsWith("messages.") &&
+    !path.startsWith("friends.")
   ) {
     // artificial delay in dev
     const waitMs = Math.floor(Math.random() * 400) + 100;

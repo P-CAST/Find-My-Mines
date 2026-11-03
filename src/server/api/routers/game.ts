@@ -1,3 +1,7 @@
+import { ratingStore } from "~/server/game/ratings";
+import { achievementStore } from "~/server/game/achievements";
+import { friendStore } from "~/server/friends";
+import { social } from "~/server/friends/service";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { env } from "~/env";
@@ -15,7 +19,7 @@ import {
   history,
   profile,
   replay,
-  saveResult,
+  saveCompletion,
   analysisSource,
   readAnalysis,
   saveAnalysis,
@@ -34,7 +38,7 @@ const analysisService = createAnalysisService(
 
 const gameProcedure = publicProcedure.use(({ ctx, next }) => {
   const game = getGame();
-  game.setResultWriter(saveResult);
+  game.setCompletionWriter(saveCompletion);
   game.setBotProvider(botProvider);
   const actor: Actor = {
     sessionId: ctx.gameSession.id,
@@ -59,6 +63,109 @@ const nickname = z
   .max(24)
   .refine((value) => !/[\p{C}]/u.test(value), "Use visible characters.");
 export const gameRouter = createTRPCRouter({
+  leaderboard: publicProcedure
+    .input(z.object({ page: z.number().int().min(0).max(1000000).default(0) }))
+    .query(({ input }) => ratingStore.leaderboard(input.page)),
+  rating: protectedProcedure.query(({ ctx }) =>
+    ratingStore.own(ctx.session.user.id),
+  ),
+  matchRating: protectedProcedure
+    .input(z.object({ matchId: z.string().uuid() }))
+    .query(({ ctx, input }) =>
+      ratingStore.match(ctx.session.user.id, input.matchId),
+    ),
+  achievements: protectedProcedure.query(({ ctx }) =>
+    achievementStore.own(ctx.session.user.id),
+  ),
+  publicAchievements: publicProcedure
+    .input(z.object({ publicId: z.string().uuid() }))
+    .query(({ input }) => achievementStore.publicCollection(input.publicId)),
+  setAchievementVisibility: protectedProcedure
+    .input(z.object({ achievementsPublic: z.boolean() }))
+    .mutation(({ ctx, input }) =>
+      achievementStore.setVisibility(
+        ctx.session.user.id,
+        input.achievementsPublic,
+      ),
+    ),
+  invitations: protectedProcedure.query(({ ctx }) =>
+    getGame().invitationsFor(ctx.session.user.id),
+  ),
+  inviteFriend: protectedProcedure
+    .input(z.object({ publicId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const fromId = ctx.session.user.id,
+        to = await friendStore.target(input.publicId);
+      return social.serial(fromId, to.userId, async () => {
+        if (
+          (await friendStore.relationship(fromId, to.userId))?.status !==
+          "accepted"
+        )
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Only friends can invite each other.",
+          });
+        const game = getGame();
+        if (
+          !game
+            .invitationsFor(fromId)
+            .some(
+              (i) =>
+                !i.roomId && !i.incoming && i.other.publicId === to.publicId,
+            )
+        ) {
+          social.limit(fromId, "invite");
+          social.checkCooldown(fromId, to.userId, "invite");
+        }
+        const from = await profile(fromId);
+        if (!social.online(fromId) || !social.online(to.userId))
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Both friends must be online.",
+          });
+        return game.inviteFriend(
+          {
+            userId: fromId,
+            publicId: from.publicId,
+            name: ctx.session.user.name,
+          },
+          to,
+        );
+      });
+    }),
+  respondInvitation: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        action: z.enum(["accept", "decline", "cancel"]),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const viewer = ctx.session.user.id,
+        game = getGame();
+      const pair = game.invitationPair(viewer, input.id);
+      return social.serial(pair.from, pair.to, async () => {
+        if (input.action !== "accept") {
+          game.dismissFriendInvitation(viewer, input.id, input.action);
+          social.cool(pair.from, pair.to, "invite");
+          return { roomId: null };
+        }
+        if (
+          (await friendStore.relationship(pair.from, pair.to))?.status !==
+          "accepted"
+        )
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "This friendship is no longer available.",
+          });
+        if (!social.online(pair.from) || !social.online(pair.to))
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Both friends must be online.",
+          });
+        return game.acceptFriendInvitation(viewer, input.id);
+      });
+    }),
   analysis: publicProcedure
     .input(z.object({ matchId: z.string().uuid() }))
     .query(({ ctx, input }) =>

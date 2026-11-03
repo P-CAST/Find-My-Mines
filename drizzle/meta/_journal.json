@@ -15,6 +15,27 @@
       "when": 1793376311180,
       "tag": "0001_premium_enchantress",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793614674351,
+      "tag": "0002_stormy_spitfire",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793705204128,
+      "tag": "0003_soft_psynapse",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793708505291,
+      "tag": "0004_white_tomas",
+      "breakpoints": true
     }
   ]
 }

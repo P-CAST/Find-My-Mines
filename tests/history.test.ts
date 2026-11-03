@@ -13,12 +13,16 @@ void test(
     const { sql } = await import("drizzle-orm");
     const { db } = await import("../src/server/db");
     const { createHistoryStore } = await import("../src/server/game/history");
+    const { createRatingStore } = await import("../src/server/game/ratings");
     const rollback = new Error("Rollback temporary test tables");
     try {
       await db.transaction(async (tx) => {
         for (const filename of [
           "0000_even_mariko_yashida.sql",
           "0001_premium_enchantress.sql",
+          "0002_stormy_spitfire.sql",
+          "0003_soft_psynapse.sql",
+          "0004_white_tomas.sql",
         ]) {
           const migration = (
             await readFile(
@@ -37,6 +41,7 @@ void test(
               from (values ('a'), ('b'), ('outsider')) as users(id)`,
         );
         const store = createHistoryStore(tx);
+        const ratings = createRatingStore(tx);
         const a = await store.profile("a"),
           b = await store.profile("b");
         assert.equal(a.historyPublic, false);
@@ -61,6 +66,63 @@ void test(
           ...record,
           playerOneName: "Must not overwrite",
         });
+        assert.equal((await ratings.own("a")).rating, 1016);
+        assert.equal((await ratings.own("b")).rating, 984);
+        assert.equal((await ratings.own("a")).games, 1);
+        assert.deepEqual(await ratings.match("a", record.matchId), {
+          before: 1000,
+          after: 1016,
+          delta: 16,
+        });
+        await assert.rejects(
+          ratings.match("outsider", record.matchId),
+          /unavailable/,
+        );
+        assert.equal((await ratings.own("outsider")).rank, null);
+        const board = await ratings.leaderboard(0);
+        assert.equal(board.items[0]?.rank, 1);
+        assert.equal(board.items[1]?.rating, 984);
+        assert.equal(JSON.stringify(board).includes("userId"), false);
+        assert.equal(JSON.stringify(board).includes("email"), false);
+        // A rolled-back completion must leave neither ratings nor a result.
+        const failedId = randomUUID();
+        await assert.rejects(
+          tx.transaction(async (nested) => {
+            await createHistoryStore(nested).saveResult({
+              ...record,
+              matchId: failedId,
+            });
+            throw new Error("injected rollback");
+          }),
+          /injected rollback/,
+        );
+        assert.equal((await ratings.own("a")).rating, 1016);
+        await assert.rejects(ratings.match("a", failedId), /unavailable/);
+        // Exercise a forfeit and a retry in a savepoint, then restore the fixture.
+        const restore = new Error("restore fixture");
+        try {
+          await tx.transaction(async (nested) => {
+            const nestedStore = createHistoryStore(nested);
+            const next = {
+              ...record,
+              matchId: failedId,
+              reason: "forfeit" as const,
+            };
+            await nestedStore.saveResult(next);
+            await nestedStore.saveResult(next);
+            assert.equal(
+              (await createRatingStore(nested).own("a")).rating,
+              1031,
+            );
+            assert.equal(
+              (await createRatingStore(nested).own("b")).rating,
+              969,
+            );
+            throw restore;
+          });
+        } catch (error) {
+          if (error !== restore) throw error;
+        }
         assert.equal((await store.history("a", {})).items.length, 1);
         assert.equal((await store.history("b", {})).items.length, 1);
         assert.equal((await store.history("outsider", {})).items.length, 0);
@@ -176,6 +238,53 @@ void test(
           sql`select count(*)::int as count from "game_analysis" where match_id = ${record.matchId}`,
         );
         assert.equal(orphaned[0]?.count, 0);
+        // Legacy results remain unrated; public ranks do not depend on history consent.
+        await tx.execute(
+          sql`update game_result set player_one_rating_before = null, player_one_rating_after = null, player_two_rating_before = null, player_two_rating_after = null`,
+        );
+        const remaining = (await store.history("a", {})).items[0]!;
+        assert.equal(await ratings.match("a", remaining.matchId), null);
+        await store.saveResult({ ...record, matchId: remaining.matchId });
+        assert.equal(await ratings.match("a", remaining.matchId), null);
+        await tx.execute(
+          sql`update game_profile set rating = 1000 where user_id in ('a', 'b')`,
+        );
+        const tied = await ratings.leaderboard(0);
+        assert.deepEqual(
+          tied.items.map((p) => p.rank),
+          [1, 1],
+        );
+        assert.deepEqual(
+          tied.items.map((p) => p.publicId),
+          tied.items.map((p) => p.publicId).sort(),
+        );
+        await tx.execute(sql`insert into "user" (id, name, email, email_verified, created_at, updated_at)
+          select 'rank-' || i, 'Rank ' || i, 'rank-' || i || '@example.test', false, now(), now() from generate_series(1, 51) i`);
+        await tx.execute(sql`insert into game_profile (user_id, rating, rated_games, rated_wins, rated_losses)
+          select 'rank-' || i, 900, 1, 0, 1 from generate_series(1, 51) i`);
+        const firstRanks = await ratings.leaderboard(0),
+          secondRanks = await ratings.leaderboard(1);
+        assert.equal(firstRanks.items.length, 50);
+        assert.equal(firstRanks.hasNextPage, true);
+        assert.equal(secondRanks.items.length, 3);
+        assert.equal(secondRanks.hasNextPage, false);
+        assert.equal(secondRanks.items[0]?.rank, 3);
+        assert.equal(
+          new Set(
+            [...firstRanks.items, ...secondRanks.items].map((p) => p.publicId),
+          ).size,
+          53,
+        );
+        const survivor = await ratings.own("b");
+        await tx.execute(sql`delete from "user" where id = 'a'`);
+        assert.equal((await ratings.own("b")).rating, survivor.rating);
+        assert.equal((await ratings.own("b")).games, survivor.games);
+        assert.equal(
+          (await ratings.leaderboard(0)).items.some(
+            (p) => p.publicId === a.publicId,
+          ),
+          false,
+        );
         throw rollback;
       });
     } catch (error) {

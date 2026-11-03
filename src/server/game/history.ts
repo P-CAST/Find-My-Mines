@@ -1,28 +1,92 @@
+import { eloChange } from "~/lib/elo";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, lt, or, sql } from "drizzle-orm";
 import { db } from "~/server/db";
 import { gameAnalyses, gameProfiles, gameResults } from "~/server/db/schema";
+import { persistAchievementSummaries } from "./achievements";
 import type { SavedAnalysis } from "./analysis";
-import type { MatchRecord } from "./service";
+import type { MatchRecord, MatchCompletion } from "./service";
 
 export type HistoryCursor = { finishedAt: Date; matchId: string };
 type HistoryDatabase =
   typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 export function createHistoryStore(database: HistoryDatabase) {
-  async function saveResult(record: MatchRecord) {
+  async function saveCompletion(completion: MatchCompletion) {
     await database.transaction(async (tx) => {
-      await tx
-        .insert(gameProfiles)
-        .values([
-          { userId: record.playerOneId },
-          { userId: record.playerTwoId },
-        ])
-        .onConflictDoNothing();
-      await tx
-        .insert(gameResults)
-        .values(record)
-        .onConflictDoNothing({ target: gameResults.matchId });
+      const record = completion.result;
+      const userIds = [
+        ...new Set([
+          ...completion.summaries.map((fact) => fact.userId),
+          ...(record ? [record.playerOneId, record.playerTwoId] : []),
+        ]),
+      ].sort();
+      // Lock consistently before results or counters: retries and concurrent matches
+      // for an account must observe each other's committed progress.
+      for (const userId of userIds) {
+        await tx.insert(gameProfiles).values({ userId }).onConflictDoNothing();
+        await tx
+          .select({ userId: gameProfiles.userId })
+          .from(gameProfiles)
+          .where(eq(gameProfiles.userId, userId))
+          .for("update");
+      }
+      if (record) {
+        if (
+          record.playerOneId === record.playerTwoId ||
+          ![0, 1].includes(record.winnerSeat)
+        )
+          throw new Error("Invalid rated match participants or winner");
+        const profiles = await tx
+          .select()
+          .from(gameProfiles)
+          .where(
+            or(
+              eq(gameProfiles.userId, record.playerOneId),
+              eq(gameProfiles.userId, record.playerTwoId),
+            ),
+          );
+        const one = profiles.find((p) => p.userId === record.playerOneId)!;
+        const two = profiles.find((p) => p.userId === record.playerTwoId)!;
+        const delta = eloChange(
+          one.rating,
+          two.rating,
+          record.winnerSeat === 0,
+        );
+        const inserted = await tx
+          .insert(gameResults)
+          .values({
+            ...record,
+            playerOneRatingBefore: one.rating,
+            playerOneRatingAfter: one.rating + delta,
+            playerTwoRatingBefore: two.rating,
+            playerTwoRatingAfter: two.rating - delta,
+          })
+          .onConflictDoNothing({ target: gameResults.matchId })
+          .returning({ matchId: gameResults.matchId });
+        if (inserted.length) {
+          for (const [seat, p] of [one, two].entries()) {
+            const won = record.winnerSeat === seat;
+            await tx
+              .update(gameProfiles)
+              .set({
+                rating: p.rating + (seat === 0 ? delta : -delta),
+                ratedGames: p.ratedGames + 1,
+                ratedWins: p.ratedWins + Number(won),
+                ratedLosses: p.ratedLosses + Number(!won),
+              })
+              .where(eq(gameProfiles.userId, p.userId));
+          }
+        }
+      }
+      await persistAchievementSummaries(tx, completion.summaries);
+    });
+  }
+  async function saveResult(record: MatchRecord) {
+    await saveCompletion({
+      matchId: record.matchId,
+      result: record,
+      summaries: [],
     });
   }
   async function profile(userId: string) {
@@ -205,6 +269,7 @@ export function createHistoryStore(database: HistoryDatabase) {
   }
 
   return {
+    saveCompletion,
     saveResult,
     profile,
     setVisibility,
@@ -216,6 +281,7 @@ export function createHistoryStore(database: HistoryDatabase) {
   };
 }
 export const {
+  saveCompletion,
   saveResult,
   profile,
   setVisibility,

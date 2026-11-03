@@ -164,7 +164,7 @@ export default function OperatorPage() {
               {data.count} connected sessions
             </p>
             <p>
-              {data.pendingSaves} pending result/replay saves ·{" "}
+              {data.pendingSaves} pending result/achievement saves ·{" "}
               {data.failedSaves} failed saves retrying
             </p>
             <label className="fieldset">

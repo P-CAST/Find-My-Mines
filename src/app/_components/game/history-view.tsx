@@ -1,4 +1,6 @@
 "use client";
+import { ACHIEVEMENTS } from "~/lib/achievements";
+import { BadgeCollection } from "./badge-collection";
 import Link from "next/link";
 import { api } from "~/trpc/react";
 import { authClient } from "~/server/better-auth/client";
@@ -12,6 +14,20 @@ export function HistoryView({ publicId }: { publicId?: string }) {
     enabled: own && !!account,
     retry: false,
   });
+  const achievements = api.game.publicAchievements.useQuery(
+    { publicId: publicId ?? "" },
+    {
+      enabled: !!publicId,
+      retry: false,
+      refetchOnMount: "always",
+      refetchOnWindowFocus: "always",
+    },
+  );
+  const publicBadges =
+    achievements.data?.badges.flatMap((earned) => {
+      const badge = ACHIEVEMENTS.find((badge) => badge.id === earned.id);
+      return badge ? [{ ...badge, unlockedAt: earned.unlockedAt }] : [];
+    }) ?? [];
   const history = api.game.history.useInfiniteQuery(
     { publicId },
     {
@@ -32,12 +48,32 @@ export function HistoryView({ publicId }: { publicId?: string }) {
     <PageShell>
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-3xl font-bold">
-          {own ? "My game history" : "Public game history"}
+          {own ? "My game history" : "Player profile"}
         </h1>
         <Link className="btn btn-sm" href="/game">
           Game lobby
         </Link>
       </div>
+      {!own && (
+        <div className="mb-5">
+          <Panel title="Achievements">
+            {achievements.isPending ? (
+              <p role="status">Loading badges…</p>
+            ) : achievements.error ? (
+              <p>{achievements.error.message}</p>
+            ) : publicBadges.length ? (
+              <BadgeCollection badges={publicBadges} />
+            ) : (
+              <p>No badges earned yet.</p>
+            )}
+          </Panel>
+        </div>
+      )}
+      {own && (
+        <Link className="btn btn-sm mb-5" href="/game/achievements">
+          My achievements
+        </Link>
+      )}
       {own && !account ? (
         <Panel title="Sign in to view your history">
           <p>

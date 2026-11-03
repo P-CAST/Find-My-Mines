@@ -17,5 +17,8 @@ export default {
     "game_profile",
     "game_result",
     "game_analysis",
+    "friendship",
+    "achievement_summary",
+    "earned_badge",
   ],
 } satisfies Config;
