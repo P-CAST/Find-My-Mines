@@ -16,7 +16,12 @@ export function GlobalMessageBoard() {
   return (
     <MessageBoard
       key={`${account?.user.id ?? "guest"}:${session.data?.id ?? ""}`}
-      ready={!!session.data && !isPending && !session.isFetching}
+      ready={
+        !!session.data &&
+        !isPending &&
+        !session.isFetching &&
+        (!!account || !!session.data.nickname)
+      }
       bootstrapError={session.error?.message}
       refreshSession={session.refetch}
     />

@@ -25,7 +25,6 @@ export default function RoomPage() {
     setError,
     retry,
     nickname,
-    setNickname,
   } = useGameConnection(roomId);
   const [elapsed, setElapsed] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -157,20 +156,10 @@ export default function RoomPage() {
                   <form
                     onSubmit={(e) => {
                       e.preventDefault();
-                      join.mutate({ roomId, nickname });
+                      join.mutate({ roomId });
                     }}
                   >
                     <fieldset className="fieldset">
-                      <legend className="fieldset-legend">Your nickname</legend>
-                      <input
-                        className="input w-full"
-                        aria-label="Nickname"
-                        value={nickname}
-                        onChange={(e) => setNickname(e.target.value)}
-                        maxLength={24}
-                        required
-                        autoComplete="nickname"
-                      />
                       <button
                         className="btn btn-primary mt-2"
                         disabled={

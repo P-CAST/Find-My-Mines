@@ -1,7 +1,7 @@
 "use client";
 
-import Link from "next/link";
 import { useRef, useState, type FormEvent } from "react";
+import { api } from "~/trpc/react";
 import { authClient } from "~/server/better-auth/client";
 
 export default function Home() {
@@ -16,6 +16,50 @@ export default function Home() {
     error: sessionError,
     refetch,
   } = authClient.useSession();
+
+  const guestSession = api.game.session.useQuery(undefined, {
+    retry: false,
+    refetchOnWindowFocus: false,
+    enabled: !isPending && !session,
+  });
+  const saveGuestName = api.game.setGuestName.useMutation();
+  const destination = () => {
+    const target = new URLSearchParams(window.location.search).get("returnTo");
+    return target && /^\/game(?:\/[a-f0-9-]{36})?$/.test(target)
+      ? target
+      : "/game";
+  };
+  const playGuest = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (submitting.current) return;
+    const name = new FormData(event.currentTarget).get("nickname");
+    const nickname = typeof name === "string" ? name.trim() : "";
+    if (
+      !guestSession.data?.nickname &&
+      (!nickname || nickname.length > 24 || /[\p{C}]/u.test(nickname))
+    ) {
+      setError("Choose a name with 1–24 visible characters.");
+      return;
+    }
+    submitting.current = true;
+    setPending(true);
+    setError("");
+    try {
+      if (!guestSession.data?.nickname) {
+        await saveGuestName.mutateAsync({ nickname });
+      }
+      window.location.assign(destination());
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Unable to save your name. Please try again.",
+      );
+    } finally {
+      submitting.current = false;
+      setPending(false);
+    }
+  };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -46,7 +90,7 @@ export default function Home() {
         return;
       }
       form.reset();
-      window.location.assign("/game");
+      window.location.assign(destination());
     } catch {
       setError(
         "Unable to reach the server. Check your connection and try again.",
@@ -82,12 +126,15 @@ export default function Home() {
                   Welcome, {session.user.name}.
                 </h2>
                 <p>
-                  Your name will be filled in at the lobby. You can change it
-                  before joining.
+                  Your account name is used in games and the global message
+                  board.
                 </p>
-                <Link href="/game" className="btn btn-primary w-full">
+                <button
+                  className="btn btn-primary w-full"
+                  onClick={() => window.location.assign(destination())}
+                >
                   Play
-                </Link>
+                </button>
               </section>
             ) : (
               <>
@@ -142,13 +189,62 @@ export default function Home() {
                 >
                   <h2 className="card-title">Ready to play?</h2>
                   <p>
-                    No account needed. Choose a nickname in the lobby and take a
-                    seat.
+                    No account needed. Your guest name is used in games and the
+                    global message board for this session.
                   </p>
-                  <p>Find the most bombs to win.</p>
-                  <Link href="/game" className="btn btn-primary w-full">
-                    Play
-                  </Link>
+                  {isPending || guestSession.isPending ? (
+                    <p role="status">Checking your session…</p>
+                  ) : sessionError || guestSession.error ? (
+                    <div className="alert alert-error" role="alert">
+                      <span>Unable to check your session.</span>
+                      <button
+                        className="btn btn-sm"
+                        onClick={() => {
+                          void refetch();
+                          void guestSession.refetch();
+                        }}
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  ) : (
+                    <form onSubmit={playGuest} aria-busy={pending}>
+                      <fieldset className="fieldset" disabled={pending}>
+                        {guestSession.data?.nickname ? (
+                          <p>
+                            Playing as{" "}
+                            <strong>{guestSession.data.nickname}</strong>
+                          </p>
+                        ) : (
+                          <>
+                            <label className="label" htmlFor="guest-name">
+                              Guest name
+                            </label>
+                            <input
+                              id="guest-name"
+                              name="nickname"
+                              className="input w-full"
+                              autoComplete="nickname"
+                              maxLength={24}
+                              required
+                            />
+                          </>
+                        )}
+                        {error && (
+                          <p className="text-error" role="alert">
+                            {error}
+                          </p>
+                        )}
+                        <button
+                          type="submit"
+                          className="btn btn-primary mt-4 w-full"
+                          disabled={pending}
+                        >
+                          {pending ? "Please wait…" : "Play"}
+                        </button>
+                      </fieldset>
+                    </form>
+                  )}
                 </section>
                 <section
                   id="login-panel"

@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { api } from "~/trpc/react";
 import { authClient } from "~/server/better-auth/client";
 import type { GameSnapshot, LobbySnapshot } from "~/server/game/service";
@@ -17,7 +18,16 @@ export function useGameConnection(roomId?: string) {
   const [error, setError] = useState("");
   const [offset, setOffset] = useState(0);
   const [connection, setConnection] = useState<Connection>("reconnecting");
-  const [editedName, setEditedName] = useState<string>();
+  const router = useRouter();
+  const identityReady =
+    !accountPending && !!session.data && !session.isFetching;
+  const named = identityReady && (!!account || !!session.data?.nickname);
+  useEffect(() => {
+    if (identityReady && !account && !session.data?.nickname) {
+      const destination = roomId ? `/game/${roomId}` : "/game";
+      router.replace(`/?returnTo=${encodeURIComponent(destination)}`);
+    }
+  }, [identityReady, account, session.data?.nickname, roomId, router]);
   const utils = api.useUtils();
   const onError = (cause: { message: string }) => {
     setError(cause.message);
@@ -31,7 +41,7 @@ export function useGameConnection(roomId?: string) {
   const roomStream = api.game.onState.useSubscription(
     { roomId: roomId ?? "00000000-0000-0000-0000-000000000000" },
     {
-      enabled: !!roomId && !!session.data && !accountPending,
+      enabled: !!roomId && named,
       onData(data) {
         timing(data);
         setRoom((previous) =>
@@ -46,7 +56,7 @@ export function useGameConnection(roomId?: string) {
     },
   );
   const lobbyStream = api.game.onLobby.useSubscription(undefined, {
-    enabled: !roomId && !!session.data && !accountPending,
+    enabled: !roomId && named,
     onData(data) {
       timing(data);
       setLobby((previous) =>
@@ -144,12 +154,6 @@ export function useGameConnection(roomId?: string) {
       void refetchSession();
       reset();
     },
-    nickname:
-      editedName ??
-      (account?.user.name ?? "")
-        .slice(0, 24)
-        .replace(/[\p{C}]/gu, "")
-        .trim(),
-    setNickname: setEditedName,
+    nickname: session.data?.nickname ?? "",
   };
 }

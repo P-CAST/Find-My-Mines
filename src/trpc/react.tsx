@@ -107,7 +107,12 @@ export function TRPCReactProvider(props: { children: React.ReactNode }) {
             }),
             false: splitLink({
               condition: (op) =>
-                ["game.session", "game.login", "game.logout"].includes(op.path),
+                [
+                  "game.session",
+                  "game.setGuestName",
+                  "game.login",
+                  "game.logout",
+                ].includes(op.path),
               true: httpLink({
                 transformer: SuperJSON,
                 url: SERVER_ORIGIN + "/api/trpc",

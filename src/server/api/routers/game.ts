@@ -14,7 +14,13 @@ import {
 } from "~/server/api/trpc";
 import { getGame, type Actor } from "~/server/game/service";
 import { gameStream } from "~/server/game/stream";
-import { operatorLogin, operatorLogout } from "~/server/game/session";
+import {
+  operatorLogin,
+  operatorLogout,
+  nicknameInput,
+  setGuestName,
+  playerName,
+} from "~/server/game/session";
 import {
   history,
   profile,
@@ -56,12 +62,6 @@ const operatorProcedure = gameProcedure.use(({ ctx, next }) => {
   return next();
 });
 const roomInput = z.object({ roomId: z.string().uuid() });
-const nickname = z
-  .string()
-  .trim()
-  .min(1)
-  .max(24)
-  .refine((value) => !/[\p{C}]/u.test(value), "Use visible characters.");
 export const gameRouter = createTRPCRouter({
   leaderboard: publicProcedure
     .input(z.object({ page: z.number().int().min(0).max(1000000).default(0) }))
@@ -180,32 +180,62 @@ export const gameRouter = createTRPCRouter({
     id: ctx.gameSession.id,
     operator: ctx.gameSession.operator,
     account: !!ctx.actor.userId,
+    nickname:
+      ctx.session?.user.name != null
+        ? playerName(ctx.session.user.name, null)
+        : ctx.gameSession.guestName,
     serverNow: Date.now(),
     instanceId: ctx.game.instanceId,
   })),
+  setGuestName: gameProcedure
+    .input(z.object({ nickname: nicknameInput }).strict())
+    .mutation(({ ctx, input }) => {
+      if (ctx.session)
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Signed-in players use their account name.",
+        });
+      return {
+        nickname: setGuestName(
+          ctx.gameSession,
+          input.nickname,
+          ctx.responseHeaders,
+        ),
+      };
+    }),
   create: gameProcedure
-    .input(z.object({ nickname, visibility: z.enum(["public", "unlisted"]) }))
+    .input(z.object({ visibility: z.enum(["public", "unlisted"]) }).strict())
     .mutation(({ ctx, input }) =>
-      ctx.game.create(ctx.actor, input.nickname, input.visibility),
+      ctx.game.create(
+        ctx.actor,
+        playerName(ctx.session?.user.name, ctx.gameSession.guestName),
+        input.visibility,
+      ),
     ),
-  createBot: gameProcedure
-    .input(z.object({ nickname }))
-    .mutation(({ ctx, input }) =>
-      ctx.game.createBot(ctx.actor, input.nickname),
+  createBot: gameProcedure.mutation(({ ctx }) =>
+    ctx.game.createBot(
+      ctx.actor,
+      playerName(ctx.session?.user.name, ctx.gameSession.guestName),
     ),
+  ),
   join: gameProcedure
-    .input(roomInput.extend({ nickname }))
+    .input(roomInput.strict())
     .mutation(({ ctx, input }) =>
-      ctx.game.join(ctx.actor, input.roomId, input.nickname),
+      ctx.game.join(
+        ctx.actor,
+        input.roomId,
+        playerName(ctx.session?.user.name, ctx.gameSession.guestName),
+      ),
     ),
   leave: gameProcedure
     .input(roomInput)
     .mutation(({ ctx, input }) => ctx.game.leave(ctx.actor, input.roomId)),
-  queueJoin: gameProcedure
-    .input(z.object({ nickname }))
-    .mutation(({ ctx, input }) =>
-      ctx.game.queueJoin(ctx.actor, input.nickname),
+  queueJoin: gameProcedure.mutation(({ ctx }) =>
+    ctx.game.queueJoin(
+      ctx.actor,
+      playerName(ctx.session?.user.name, ctx.gameSession.guestName),
     ),
+  ),
   queueCancel: gameProcedure.mutation(({ ctx }) =>
     ctx.game.queueCancel(ctx.actor),
   ),

@@ -1,6 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { playerName } from "~/server/game/session";
 
 export const messageInput = z
   .object({
@@ -19,6 +20,7 @@ export type MessageActor = {
   sessionId: string;
   userId: string | null;
   userName?: string | null;
+  guestName?: string | null;
 };
 export type BoardMessage = {
   id: string;
@@ -35,10 +37,6 @@ export type BoardSnapshot = {
 };
 const actorKey = (actor: MessageActor) =>
   actor.userId ? `account:${actor.userId}` : `guest:${actor.sessionId}`;
-// A stable public label, never an authorization credential or raw session ID.
-const anonymousName = (author: string) =>
-  `Anonymous ${100_000 + (createHash("sha256").update(author).digest().readUInt32BE(0) % 900_000)}`;
-
 /** Independent of game rooms, presence, timers, and recordings. */
 export class MessageService {
   readonly runtimeVersion = 1;
@@ -60,12 +58,9 @@ export class MessageService {
       else this.attempts.delete(key);
     }
     const key = actorKey(actor);
-    const accountName = (actor.userName ?? "").replace(/[\p{C}]/gu, "").trim();
     const nickname = actor.userId
-      ? accountName.length > 0
-        ? accountName
-        : "Account"
-      : anonymousName(key);
+      ? (actor.userName ?? "").replace(/[\p{C}]/gu, "").trim() || "Account"
+      : playerName(null, actor.guestName ?? null);
     const times = this.attempts.get(key) ?? [];
     if (times.length >= 10 || (times.length && now - times.at(-1)! < 2000))
       throw new TRPCError({
@@ -97,8 +92,6 @@ export class MessageService {
       revision: this.revision,
       messages: this.messages.map(({ author, ...message }) => ({
         ...message,
-        // Also relabel guest messages retained from the previous UI under HMR.
-        nickname: message.account ? message.nickname : anonymousName(author),
         own: author === key,
       })),
     };

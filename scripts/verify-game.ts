@@ -55,7 +55,12 @@ function client() {
         true: httpLink({ ...options, url: `${origin}/api/messages` }),
         false: splitLink({
           condition: (op) =>
-            ["game.session", "game.login", "game.logout"].includes(op.path),
+            [
+              "game.session",
+              "game.setGuestName",
+              "game.login",
+              "game.logout",
+            ].includes(op.path),
           true: httpLink(options),
           false: httpBatchStreamLink(options),
         }),
@@ -157,6 +162,32 @@ const roomScopes = new Map<ReturnType<typeof client>, string>();
 const owned: { owner: ReturnType<typeof client>; roomId: string }[] = [];
 try {
   await Promise.all([...players, op].map((c) => c.api.game.session.query()));
+  await assert.rejects(
+    a.api.game.create.mutate({ visibility: "public" }),
+    /homepage/,
+  );
+  await assert.rejects(a.api.game.createBot.mutate(), /homepage/);
+  await assert.rejects(a.api.game.queueJoin.mutate(), /homepage/);
+  await assert.rejects(
+    a.api.game.join.mutate({ roomId: "00000000-0000-0000-0000-000000000000" }),
+    /homepage/,
+  );
+  await assert.rejects(
+    a.api.messages.send.mutate({ text: "Unnamed guest" }),
+    /homepage/,
+  );
+  await Promise.all(
+    players.map((player, index) =>
+      player.api.game.setGuestName.mutate({
+        nickname: ["HTTP Alice", "HTTP Bob", "HTTP Carol", "HTTP Dana"][index]!,
+      }),
+    ),
+  );
+  assert.equal((await a.api.game.session.query()).nickname, "HTTP Alice");
+  await assert.rejects(
+    a.api.game.setGuestName.mutate({ nickname: "Changed name" }),
+    /fixed/,
+  );
   const dummy = { roomId: "00000000-0000-0000-0000-000000000000" };
   await assert.rejects(a.api.game.reset.mutate(dummy), /Operator login/);
   await assert.rejects(a.api.game.start.mutate(dummy), /Operator login/);
@@ -204,14 +235,14 @@ try {
     bBoard.latest()!.messages.find((message) => message.id === sent.id)!.own,
     false,
   );
-  const anonymous = aBoard
+  const guestName = aBoard
     .latest()!
     .messages.find((message) => message.id === sent.id)!.nickname;
-  assert.match(anonymous, /^Anonymous [1-9]\d{5}$/);
+  assert.equal(guestName, "HTTP Alice");
   assert.equal(
     bBoard.latest()!.messages.find((message) => message.id === sent.id)!
       .nickname,
-    anonymous,
+    guestName,
   );
   const spoofed = await a.transport(`${origin}/api/messages/messages.send`, {
     method: "POST",
@@ -252,7 +283,7 @@ try {
     reconnectedBoard
       .latest()!
       .messages.find((message) => message.id === sent.id)!.nickname,
-    anonymous,
+    guestName,
   );
   for (const player of players) {
     const lobby = await stream<LobbySnapshot>(player, "game.onLobby");
@@ -270,12 +301,10 @@ try {
     );
   }
   const first = await a.api.game.create.mutate({
-    nickname: "HTTP Alice",
     visibility: "public",
   });
   owned.push({ owner: a, roomId: first.roomId });
   const second = await c.api.game.create.mutate({
-    nickname: "HTTP Carol",
     visibility: "unlisted",
   });
   owned.push({ owner: c, roomId: second.roomId });
@@ -305,12 +334,10 @@ try {
   roomScopes.set(d, second.roomId);
   const joined = await b.api.game.join.mutate({
     ...first,
-    nickname: "HTTP Bob",
   });
   owned.push({ owner: b, roomId: first.roomId });
   const otherRoom = await d.api.game.join.mutate({
     ...second,
-    nickname: "HTTP Dana",
   });
   owned.push({ owner: d, roomId: second.roomId });
   assert.equal(joined.phase, "active");

@@ -8,16 +8,8 @@ import { useGameConnection } from "~/app/_components/game/use-game-connection";
 import { GlobalMessageBoard } from "~/app/_components/game/global-message-board";
 
 export default function GameLobby() {
-  const {
-    lobby,
-    account,
-    connection,
-    error,
-    setError,
-    retry,
-    nickname,
-    setNickname,
-  } = useGameConnection();
+  const { lobby, account, connection, error, setError, retry, nickname } =
+    useGameConnection();
   const router = useRouter();
   const [visibility, setVisibility] = useState<"public" | "unlisted">("public");
   const waiting = useRef(false);
@@ -89,17 +81,6 @@ export default function GameLobby() {
             </>
           ) : (
             <>
-              <label className="fieldset">
-                <span className="fieldset-legend">Your nickname</span>
-                <input
-                  className="input w-full"
-                  maxLength={24}
-                  value={nickname}
-                  onChange={(e) => setNickname(e.target.value)}
-                  disabled={queued}
-                  autoComplete="nickname"
-                />
-              </label>
               {queued ? (
                 <div role="status" className="space-y-3">
                   <p>
@@ -124,7 +105,7 @@ export default function GameLobby() {
                   <button
                     className="btn btn-primary"
                     disabled={busy}
-                    onClick={() => queue.mutate({ nickname })}
+                    onClick={() => queue.mutate()}
                   >
                     Find opponent
                   </button>
@@ -133,7 +114,7 @@ export default function GameLobby() {
                     disabled={
                       busy || !lobby?.bot.available || !lobby.bot.remaining
                     }
-                    onClick={() => bot.mutate({ nickname })}
+                    onClick={() => bot.mutate()}
                   >
                     {bot.isPending ? "Creating bot game…" : "Play with bot"}
                   </button>
@@ -166,7 +147,7 @@ export default function GameLobby() {
                   <button
                     className="btn btn-primary"
                     disabled={busy}
-                    onClick={() => create.mutate({ nickname, visibility })}
+                    onClick={() => create.mutate({ visibility })}
                   >
                     Create room
                   </button>

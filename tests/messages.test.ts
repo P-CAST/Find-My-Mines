@@ -10,8 +10,13 @@ import { GameService } from "../src/server/game/service";
 const guest: MessageActor = {
   sessionId: "private-guest-session",
   userId: null,
+  guestName: "Guest Alice",
 };
-const other: MessageActor = { sessionId: "other-session", userId: null };
+const other: MessageActor = {
+  sessionId: "other-session",
+  userId: null,
+  guestName: "Guest Bob",
+};
 const input = { text: " Hello\nworld " };
 
 void test("messages validate text, preserve plain text, and expose only public fields", () => {
@@ -31,7 +36,7 @@ void test("messages validate text, preserve plain text, and expose only public f
       own: true,
     },
   ]);
-  assert.match(own.messages[0]!.nickname, /^Anonymous [1-9]\d{5}$/);
+  assert.equal(own.messages[0]!.nickname, guest.guestName);
   assert.equal(service.snapshot(other).messages[0]!.own, false);
   assert.equal(JSON.stringify(own).includes(guest.sessionId), false);
   for (const invalid of [
@@ -46,13 +51,14 @@ void test("messages validate text, preserve plain text, and expose only public f
   assert.notEqual(service.snapshot(guest).messages[0]!.text, "changed");
 });
 
-void test("author names come from verified account identity or a stable anonymous session label", () => {
+void test("author names come from verified account identity or a verified guest session name", () => {
   let now = 0;
   const service = new MessageService(() => now);
   const account = {
     sessionId: "device-one",
     userId: "private-account",
     userName: "Alice Account",
+    guestName: "Ignored guest name",
   };
   const secondDevice = { ...account, sessionId: "device-two" };
   service.send(account, input);
@@ -61,7 +67,7 @@ void test("author names come from verified account identity or a stable anonymou
   assert.equal(service.snapshot(secondDevice).messages[0]!.own, true);
   service.send(guest, input);
   const firstLabel = service.snapshot(guest).messages[1]!.nickname;
-  assert.match(firstLabel, /^Anonymous [1-9]\d{5}$/);
+  assert.equal(firstLabel, guest.guestName);
   assert.equal(service.snapshot(other).messages[1]!.nickname, firstLabel);
   now = 2000;
   service.send({ ...guest, userName: "Forged guest name" }, input);
@@ -215,4 +221,19 @@ void test("messaging activity does not change game revisions or presence", () =>
   } finally {
     game.dispose();
   }
+});
+
+void test("unnamed guests cannot post and legacy messages keep their recorded names", () => {
+  const service = new MessageService();
+  assert.throws(
+    () => service.send({ sessionId: "unnamed", userId: null }, input),
+    /homepage/,
+  );
+  assert.equal(service.snapshot(guest).revision, 0);
+  // Retained messages from before this change must not be renamed by snapshots.
+  service.send({ ...guest, guestName: "Anonymous 123456" }, input);
+  assert.equal(
+    service.snapshot(guest).messages[0]!.nickname,
+    "Anonymous 123456",
+  );
 });

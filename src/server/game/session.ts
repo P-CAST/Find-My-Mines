@@ -5,6 +5,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { TRPCError } from "@trpc/server";
+import { z } from "zod";
 
 const processState = globalThis as typeof globalThis & {
   findMyMinesSigningKey?: string;
@@ -17,6 +18,13 @@ const attempts = (processState.findMyMinesLoginAttempts ??= new Map<
   { count: number; until: number }
 >());
 const SESSION_COOKIE = "mines-session";
+const GUEST_NAME_COOKIE = "mines-guest-name";
+export const nicknameInput = z
+  .string()
+  .trim()
+  .min(1)
+  .max(24)
+  .refine((value) => !/[\p{C}]/u.test(value), "Use 1–24 visible characters.");
 const OPERATOR_COOKIE = "mines-operator";
 function sign(value: string, key = signingKey) {
   return createHmac("sha256", key).update(value).digest("hex");
@@ -81,7 +89,24 @@ export function gameSession(
     Number(expiry) > Date.now() &&
     equal(operatorSignature, sign(`${id}.${expiry}`, secret))
   );
-  return { id, operator, secure };
+  let guestName: string | null = null;
+  const nameCookie = readCookie(headers, GUEST_NAME_COOKIE);
+  const [payload, nameSignature] = nameCookie?.split(".") ?? [];
+  if (
+    payload &&
+    nameSignature &&
+    equal(nameSignature, sign(`${id}.${payload}`))
+  ) {
+    try {
+      const parsed = z
+        .object({ name: nicknameInput, expires: z.number() })
+        .parse(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
+      if (parsed.expires > Date.now()) guestName = parsed.name;
+    } catch {
+      // Invalid name cookies never supply a display name.
+    }
+  }
+  return { id, operator, secure, guestName };
 }
 export function operatorLogin(
   id: string,
@@ -127,4 +152,51 @@ export function operatorLogin(
 }
 export function operatorLogout(responseHeaders: Headers, secure: boolean) {
   setCookie(responseHeaders, OPERATOR_COOKIE, "", 0, secure);
+}
+
+/** The name is a display label; authorization remains the signed session ID. */
+export function setGuestName(
+  session: ReturnType<typeof gameSession>,
+  name: string,
+  responseHeaders: Headers,
+) {
+  const nickname = nicknameInput.parse(name);
+  if (session.guestName) {
+    if (session.guestName !== nickname)
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: "Your guest name is fixed for this session.",
+      });
+    return session.guestName;
+  }
+  const payload = Buffer.from(
+    JSON.stringify({ name: nickname, expires: Date.now() + 86400_000 }),
+  ).toString("base64url");
+  setCookie(
+    responseHeaders,
+    GUEST_NAME_COOKIE,
+    `${payload}.${sign(`${session.id}.${payload}`)}`,
+    86400,
+    session.secure,
+  );
+  return nickname;
+}
+
+export function playerName(
+  accountName: string | null | undefined,
+  guestName: string | null,
+) {
+  if (accountName != null)
+    return nicknameInput.parse(
+      accountName
+        .slice(0, 24)
+        .replace(/[\p{C}]/gu, "")
+        .trim(),
+    );
+  if (!guestName)
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "Choose your guest name on the homepage first.",
+    });
+  return nicknameInput.parse(guestName);
 }

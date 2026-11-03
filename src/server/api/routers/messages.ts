@@ -11,6 +11,7 @@ const messageProcedure = publicProcedure.use(({ ctx, next }) =>
         sessionId: ctx.gameSession.id,
         userId: ctx.session?.user.id ?? null,
         userName: ctx.session?.user.name ?? null,
+        guestName: ctx.gameSession.guestName,
       },
     },
   }),

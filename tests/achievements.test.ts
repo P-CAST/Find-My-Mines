@@ -288,7 +288,12 @@ void test(
       headers: new Headers(),
       responseHeaders: new Headers(),
       session: null,
-      gameSession: { id: randomUUID(), operator: false, secure: false },
+      gameSession: {
+        id: randomUUID(),
+        operator: false,
+        secure: false,
+        guestName: null,
+      },
     });
     await assert.rejects(
       anonymous.achievements(),
