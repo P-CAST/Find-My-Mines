@@ -26,6 +26,7 @@ export const env = createEnv({
    * `NEXT_PUBLIC_`.
    */
   client: {
+    NEXT_PUBLIC_PRODUCTION_PROTOCOL: z.enum(["http", "https"]).default("http"),
     NEXT_PUBLIC_PRODUCTION_DOMAIN: z
       .string()
       .trim()
@@ -58,6 +59,8 @@ export const env = createEnv({
     OPENAI_ANALYSIS_MODEL: process.env.OPENAI_ANALYSIS_MODEL,
     DATABASE_URL: process.env.DATABASE_URL,
     NODE_ENV: process.env.NODE_ENV,
+    NEXT_PUBLIC_PRODUCTION_PROTOCOL:
+      process.env.NEXT_PUBLIC_PRODUCTION_PROTOCOL,
     NEXT_PUBLIC_PRODUCTION_DOMAIN: process.env.NEXT_PUBLIC_PRODUCTION_DOMAIN,
     NEXT_PUBLIC_PRODUCTION_IP: process.env.NEXT_PUBLIC_PRODUCTION_IP,
     NEXT_PUBLIC_PRODUCTION_PORT: process.env.NEXT_PUBLIC_PRODUCTION_PORT,

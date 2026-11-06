@@ -10,8 +10,11 @@ export const SERVER_PORT =
   process.env.NODE_ENV === "production"
     ? Number(process.env.NEXT_PUBLIC_PRODUCTION_PORT ?? "3000")
     : 3000;
-export const SERVER_PROTOCOL = "http";
+export const SERVER_PROTOCOL =
+  process.env.NODE_ENV === "production"
+    ? (process.env.NEXT_PUBLIC_PRODUCTION_PROTOCOL ?? "http")
+    : "http";
 export const SERVER_ORIGIN =
   process.env.NODE_ENV === "development" && typeof window !== "undefined"
     ? window.location.origin
-    : `${SERVER_PROTOCOL}://${SERVER_ADDRESS}:${SERVER_PORT}`;
+    : new URL(`${SERVER_PROTOCOL}://${SERVER_ADDRESS}:${SERVER_PORT}`).origin;

@@ -4,6 +4,7 @@ import { cp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 await cp("public", "dist/standalone/public", { recursive: true });
 await cp("dist/static", "dist/standalone/dist/static", { recursive: true });
 await cp("scripts/start-production.js", "dist/standalone/start.js");
+await cp("scripts/production-https.js", "dist/standalone/production-https.js");
 
 // Preserve the public build settings as defaults for a copied deployment.
 const { config } = JSON.parse(
@@ -12,6 +13,7 @@ const { config } = JSON.parse(
 await writeFile(
   "dist/standalone/production-config.json",
   JSON.stringify({
+    protocol: config.env.NEXT_PUBLIC_PRODUCTION_PROTOCOL,
     domain: config.env.NEXT_PUBLIC_PRODUCTION_DOMAIN,
     ip: config.env.NEXT_PUBLIC_PRODUCTION_IP,
     port: config.env.NEXT_PUBLIC_PRODUCTION_PORT,

@@ -9,7 +9,13 @@ export function createApiHandler(endpoint: string, router: AnyTRPCRouter) {
     const origin = req.headers.get("origin");
     // Next may construct req.nextUrl with localhost when reached over the LAN.
     const requestOrigin = new URL(req.url);
-    requestOrigin.host = req.headers.get("host") ?? requestOrigin.host;
+    const publicHost = req.headers.get("host");
+    if (publicHost) {
+      // URL.host preserves an existing port when the new host omits one.
+      // Clear the loopback port before applying a default-port public host.
+      requestOrigin.port = "";
+      requestOrigin.host = publicHost;
+    }
     if (origin && origin !== requestOrigin.origin)
       return new Response("Use the configured application origin.", {
         status: 403,

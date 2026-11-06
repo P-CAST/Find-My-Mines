@@ -14,13 +14,13 @@ pnpm dev
 
 `pnpm dev` runs the normal Next.js development server on port 3000, using `.next` for development output. Do not start another server if one is already running. For a persistent classroom deployment, configure the production address below, run `pnpm build` once, then `pnpm start`. Use exactly one application instance. Keep it running for the demonstration. Set the existing `DATABASE_URL` and Better Auth configuration as before; `BETTER_AUTH_SECRET` is required for production. Apply the checked-in Drizzle migrations with `pnpm db:migrate` before using account history and replays. The room/history update adds two tables and requires a deliberate user-managed application restart because the in-memory service shape changed.
 
-`pnpm build` produces a deployable Node application in `dist/standalone`, including its traced dependencies, public files, compiled browser assets, and public production IP/port defaults. Copy that entire directory to the deployment host; no source checkout or dependency installation is needed there. Production builds use `dist` and leave `.next` untouched. Build-machine `.env` files are removed from the bundle. Create a runtime `.env` beside `server.js` on the VPS with `DATABASE_URL` and `BETTER_AUTH_SECRET`, then run from that directory:
+`pnpm build` produces a deployable Node application in `dist/standalone`, including its traced dependencies, public files, compiled browser assets, and public production address/protocol defaults. Copy that entire directory to the deployment host; no source checkout or dependency installation is needed there. Production builds use `dist` and leave `.next` untouched. Build-machine `.env` files are removed from the bundle. Create a runtime `.env` beside `server.js` on the VPS with `DATABASE_URL` and `BETTER_AUTH_SECRET`, then run from that directory:
 
 ```sh
 node server.js
 ```
 
-The entrypoint loads that `.env` automatically; environment variables already supplied by the host take precedence. To keep the file elsewhere, use `node --env-file=/path/to/deployment.env server.js`. When running from the source checkout, `pnpm start` loads the local `.env` if present. The launcher validates settings and rejects public IP/port overrides that differ from the browser bundle. Deploy on a compatible operating system/architecture with Node.js 22.14+.
+The entrypoint loads that `.env` automatically; environment variables already supplied by the host take precedence. To keep the file elsewhere, use `node --env-file=/path/to/deployment.env server.js`. When running from the source checkout, `pnpm start` loads the local `.env` if present. The launcher validates settings and rejects public address/protocol overrides that differ from the browser bundle. Deploy on a compatible operating system/architecture with Node.js 22.14+.
 
 Open `/` for the homepage, `/game` for rooms and matchmaking, `/game/history` for your results and replays, and `/operator` for the dashboard. Play as a guest or use the homepage Login tab to sign in or create an account. Registration asks for a name, email, and password (8–128 characters), signs you in, and opens the lobby. Guests choose a name on the homepage before entering a game; it stays fixed for the 24-hour browser guest session and is used in both games and global messages. Direct lobby or room links send unnamed guests to the homepage, then return them to their destination. Signed-in players use their account name automatically. Returning users see a welcome card; the navigation drawer shows the signed-in account and Logout.
 
@@ -192,11 +192,68 @@ NEXT_PUBLIC_PRODUCTION_PORT="3000"
 NEXT_PUBLIC_PRODUCTION_DOMAIN=""
 ```
 
-Use the IPv4 address players reach: the deployment computer's LAN address for a classroom or the VPS public address for an internet deployment. The launcher listens on all IPv4 interfaces (`0.0.0.0`) at the configured port. That listening address in Next.js's terminal output is normal; open the public IP printed by the launcher in your browser. The browser HTTP and SSE links use the public IP/port baked into the bundle, which default to `127.0.0.1:3000` when unset. Never set the public IP to `0.0.0.0`. Development keeps using `localhost:3000`; production settings do not change `pnpm dev`. All players and the operator must open the configured origin, such as `http://192.168.1.50:3000`; they do not enter connection settings in the application. Allow the port through the host firewall. Rebuild after changing either production variable because Next.js embeds public variables in the browser bundle. Requests from another browser origin are rejected.
+Use the IPv4 address players reach: the deployment computer's LAN address for a classroom or the VPS public address for an internet deployment. The launcher listens on all IPv4 interfaces (`0.0.0.0`) at the configured port. That listening address in Next.js's terminal output is normal; open the public IP printed by the launcher in your browser. The browser HTTP and SSE links use the public IP/port baked into the bundle, which default to `127.0.0.1:3000` when unset. Never set the public IP to `0.0.0.0`. Development keeps using `localhost:3000`; production settings do not change `pnpm dev`. All players and the operator must open the configured origin, such as `http://192.168.1.50:3000`; they do not enter connection settings in the application. Allow the port through the host firewall. Rebuild after changing any public production variable because Next.js embeds public variables in the browser bundle. Requests from another browser origin are rejected.
 
 To use a public domain, set `NEXT_PUBLIC_PRODUCTION_DOMAIN` to a hostname such as `mines.example.com` and point its DNS record to the VPS. Use only the hostname, without a scheme, port, or path. When set, it takes priority over the IP for browser HTTP/SSE connections and the launcher's displayed URL; leave it blank to use the IP. The domain is embedded during `pnpm build` and retained in the copied bundle, so rebuild and redeploy after changing it. Node still listens on all IPv4 interfaces. All browsers must open the configured domain origin.
 
-For a reverse proxy, set `PORT` at runtime to the internal Node listening port while keeping `NEXT_PUBLIC_PRODUCTION_PORT` at the externally reachable port used when building. HTTPS deployments should set `SERVER_PROTOCOL` in `src/lib/game-config.ts` to `https`; cookies then use `Secure`. Binding port 80 directly may produce `EACCES` if the Node process lacks permission; in that case use an authorized service configuration or the VPS's existing reverse proxy.
+For a reverse proxy, set `PORT` at runtime to the internal Node listening port while keeping `NEXT_PUBLIC_PRODUCTION_PORT` at the externally reachable port used when building. HTTPS deployments should build with `NEXT_PUBLIC_PRODUCTION_PROTOCOL="https"`; keep the proxy’s public `Host` and forward `X-Forwarded-Proto: https` so origin checks and secure cookies work. Disable response buffering and allow long-lived SSE connections. Binding port 80 directly may produce `EACCES` if the Node process lacks permission; in that case use an authorized service configuration or the VPS's existing reverse proxy.
+
+## Direct HTTPS standalone deployment
+
+The standalone launcher can serve HTTPS itself, with no separate proxy service.
+It uses Node’s built-in HTTPS server to stream requests to the generated Next HTTP
+server on loopback in the same process. Keep exactly one application instance.
+
+Before `pnpm build`, configure the public origin in your local `.env`:
+
+```dotenv
+NEXT_PUBLIC_PRODUCTION_DOMAIN="netcentric.chayatornounpat.com"
+NEXT_PUBLIC_PRODUCTION_IP="149.28.158.35"
+NEXT_PUBLIC_PRODUCTION_PORT="443"
+NEXT_PUBLIC_PRODUCTION_PROTOCOL="https"
+```
+
+Point the domain’s DNS to the VPS. Copy the entire `dist/standalone` folder as
+usual. In the VPS `.env` beside `server.js`, keep your existing `DATABASE_URL` and
+`BETTER_AUTH_SECRET`, and add:
+
+```dotenv
+TLS_CERT_PATH="/etc/ssl/find-my-mines/fullchain.pem"
+TLS_KEY_PATH="/etc/ssl/find-my-mines/privkey.pem"
+TLS_INTERNAL_PORT="3001"
+```
+
+Run `node server.js`. Open `https://netcentric.chayatornounpat.com`. The launcher
+listens publicly on port 443 and Next listens only on `127.0.0.1:3001`. Choose a
+free internal port; do not use the running development server’s port. `PORT`, if
+set, overrides the HTTPS listener port without changing the baked-in public URL
+(useful for external port mappings). The two listening ports must differ.
+
+Supply both PEM paths together. Relative paths resolve beside `server.js`, not
+against the shell’s working directory. The certificate must include the full
+chain and cover your domain; clients must trust its issuer. The private key must
+match it. Missing/unreadable files and invalid TLS material fail startup; the
+launcher never silently falls back to HTTP. Certificate paths are runtime-only;
+they are not embedded in browser assets or production-config.json. Keep the
+certificate and private key outside the deployment bundle and source checkout.
+
+Manage certificate issuance and renewal separately. Give the service account
+read access to the private key and permission to bind port 443 through your host’s
+service configuration, without running Node as root. Allow public TCP port 443.
+No port-80 redirect listener or certificate automation is included.
+
+After renewal, drain games and pending saves and deliberately restart the app to
+load the replacement files; restarting clears live rooms and unsaved state.
+SIGINT/SIGTERM also close HTTPS streams so Next can shut down, with a five-second
+upper bound for termination. Rebuilding is only required when the public
+address, port, or protocol changes.
+
+The HTTPS tests in `pnpm check` use `openssl` to generate temporary local test
+certificates; no certificate files are committed or deployed.
+
+Without TLS paths the launcher retains its HTTP behavior, including deployments
+behind an external HTTPS proxy. Public protocol defaults to `http`; `pnpm dev`
+continues using HTTP on port 3000 regardless of production settings.
 
 ## Operator setup
 
